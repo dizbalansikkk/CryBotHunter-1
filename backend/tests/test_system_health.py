@@ -67,6 +67,7 @@ async def test_system_health_checks_all_dependencies_and_worker_freshness():
         trading_panic_key="trading:panic",
         candle_ingest_symbols=["BTC/USDT"],
         worker_heartbeat_stale_seconds=180,
+        worker_heartbeat_expected_workers=["trader"],
         paper_trading=True,
     )
     service = SystemHealthService(
@@ -84,3 +85,37 @@ async def test_system_health_checks_all_dependencies_and_worker_freshness():
     assert not snapshot.trading_paused
     assert redis_client.closed
     assert exchange.closed
+
+
+@pytest.mark.asyncio
+async def test_system_health_exposes_worker_that_never_sent_a_heartbeat():
+    now = datetime(2026, 7, 21, 18, tzinfo=timezone.utc)
+    trader = SimpleNamespace(
+        worker_name="trader-worker",
+        status="OK",
+        detail={},
+        last_seen_at=now - timedelta(seconds=10),
+    )
+
+    class Db:
+        def __init__(self):
+            self.results = [Result(), Result(scalar=0), Result(scalar=0), Result(rows=[trader])]
+
+        async def execute(self, _query):
+            return self.results.pop(0)
+
+    settings = SimpleNamespace(
+        worker_heartbeat_stale_seconds=180,
+        worker_heartbeat_startup_grace_seconds=600,
+        worker_heartbeat_long_task_grace_seconds=900,
+        worker_heartbeat_expected_workers=["trader-worker", "rl-worker"],
+    )
+    service = SystemHealthService(settings=settings)
+
+    database, _pending, _failed, workers = await service._database_health(Db(), now)
+
+    assert database.ok
+    assert [worker.name for worker in workers] == ["trader-worker", "rl-worker"]
+    assert workers[0].healthy
+    assert workers[1].status == "MISSING"
+    assert not workers[1].healthy

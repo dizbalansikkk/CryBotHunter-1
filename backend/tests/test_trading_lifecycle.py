@@ -362,6 +362,24 @@ def test_paper_exploration_requires_decisive_indicator_vote():
     assert signal.signal == "WAIT"
     assert exploration is False
 
+
+def test_strategy_wait_reason_exposes_score_votes_and_missing_rules():
+    engine = TradingEngine()
+    wait = StrategySignal(
+        symbol="ETH/USDT",
+        signal="WAIT",
+        score=62,
+        reasons=["long missing: MACD positive", "long missing: price above EMA20"],
+    )
+
+    test_coin = coin().model_copy(update={"symbol": "ETH/USDT", "rating": 71})
+    reason = engine._strategy_wait_reason(test_coin, wait)
+
+    assert "score=62" in reason
+    assert "rating=71" in reason
+    assert "bullish_votes=" in reason
+    assert "long missing: MACD positive" in reason
+
 def test_paper_exploration_uses_its_own_same_side_limit_only_in_paper_mode():
     engine = TradingEngine()
     engine.settings = SimpleNamespace(

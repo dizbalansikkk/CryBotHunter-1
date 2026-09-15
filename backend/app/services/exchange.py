@@ -112,6 +112,14 @@ class ExchangeClient:
         client = self._client(authenticated=False)
         return await asyncio.to_thread(client.fetch_ohlcv, symbol, timeframe, since, limit)
 
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> dict[str, Any]:
+        client = self._client(authenticated=False)
+        return await asyncio.to_thread(client.fetch_order_book, symbol, max(int(limit), 5))
+
+    async def fetch_trades(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+        client = self._client(authenticated=False)
+        return await asyncio.to_thread(client.fetch_trades, symbol, None, max(int(limit), 10))
+
     async def prepare_order(self, symbol: str, amount: float, reference_price: float) -> PreparedOrder:
         return await asyncio.to_thread(self._prepare_order_sync, symbol, amount, reference_price)
 

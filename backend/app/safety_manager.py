@@ -31,7 +31,7 @@ class SafetyConfiguration(BaseModel):
     process: str = "unknown"
     exchange: str = "binance"
     market_type: str = "spot"
-    check_symbol: str = "BTC/USDT"
+    check_symbol: str = "ETH/USDT"
     paper_trading: bool = True
     live_trading_enabled: bool = False
     sandbox_enabled: bool = True
@@ -223,7 +223,7 @@ class SafetyManager:
             process=_env_text("APP_PROCESS", "unknown"),
             exchange=exchange.lower(),
             market_type=_env_text("EXCHANGE_DEFAULT_TYPE", "spot").lower(),
-            check_symbol=_env_text("SAFETY_CHECK_SYMBOL", "BTC/USDT").upper(),
+            check_symbol=_env_text("SAFETY_CHECK_SYMBOL", "ETH/USDT").upper(),
             paper_trading=_env_bool("PAPER_TRADING", True),
             live_trading_enabled=live,
             sandbox_enabled=_env_bool("EXCHANGE_SANDBOX_ENABLED", True),

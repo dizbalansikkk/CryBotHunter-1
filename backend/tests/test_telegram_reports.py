@@ -13,6 +13,7 @@ from app.services.telegram_reports import (
     format_trade_opened,
     format_worker_heartbeat_event,
     split_telegram_message,
+    worker_detail_summary,
 )
 
 
@@ -161,6 +162,26 @@ def test_worker_heartbeat_alert_is_readable_and_escaped():
     assert "Порог тревоги" in report
     assert "HTTP &lt;timeout&gt;" in report
     assert report.count("<b>") == report.count("</b>")
+
+
+def test_rl_cycle_detail_exposes_shadow_and_training_queue():
+    summary = worker_detail_summary(
+        {
+            "stage": "cycle_complete",
+            "trained": 1,
+            "promoted": 0,
+            "shadowed": 1,
+            "decisions": 5,
+            "shadow_decisions": 2,
+            "training_deferred": 6,
+            "errors": 0,
+        }
+    )
+
+    assert "в тени 1" in summary
+    assert "активных решений 5" in summary
+    assert "теневых 2" in summary
+    assert "в очереди 6" in summary
 
 
 def test_system_health_report_contains_dependencies_queue_and_workers():

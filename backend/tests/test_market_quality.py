@@ -47,3 +47,18 @@ def test_market_quality_blocks_untradable_market():
     assert decision.allowed is False
     assert decision.risk_multiplier == 0.0
     assert "market quality blocked" in decision.reason
+
+
+def test_market_quality_reduces_risk_instead_of_blocking_mid_liquidity_market():
+    decision = MarketQualityGate().assess(coin(volume_24h=12_500_000.0, spread_bps=8.0))
+
+    assert decision.allowed is True
+    assert decision.risk_multiplier == 0.5
+    assert "quote volume" in decision.reason
+
+
+def test_market_quality_keeps_hard_floor_for_thin_market():
+    decision = MarketQualityGate().assess(coin(volume_24h=2_000_000.0, spread_bps=8.0))
+
+    assert decision.allowed is False
+    assert "hard limit" in decision.reason

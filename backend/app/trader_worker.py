@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import ccxt
@@ -7,15 +8,16 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, engine as database_engine
 from app.models.entities import LogEntry, UserSettings
 from app.safety_manager import SafetyCredentials, SafetyManager, ShutdownController, configure_stdout_logging
 from app.services.control import TradingControlService
 from app.services.exchange import ExchangeClient, exchange_error_message
 from app.services.heartbeat import HeartbeatReporter
-from app.services.locks import RedisLockManager
+from app.services.locks import RedisLockManager, TRADING_CYCLE_LOCK
 from app.services.reconciliation import OrderReconciliationService
 from app.services.risk_manager import RiskSettings
+from app.services.schema_readiness import wait_for_required_tables
 from app.services.telegram_bot import TelegramNotifier
 from app.services.telegram_cards import safe_render_cycle_card
 from app.services.telegram_reports import format_cycle_report, format_worker_error, format_worker_started
@@ -42,6 +44,18 @@ async def main() -> None:
     last_error_report_at: datetime | None = None
     logger.info("Trader worker started with loop=%ss", settings.trader_loop_seconds)
     await heartbeat.start()
+    schema_ready = await wait_for_required_tables(
+        database_engine,
+        ("trade_post_mortems", "shadow_trades"),
+        heartbeat=heartbeat,
+        shutdown=shutdown,
+    )
+    if not schema_ready:
+        await heartbeat.stop()
+        await locks.close()
+        await control.close()
+        logger.info("Trader worker stopped while waiting for database migration")
+        return
     if settings.telegram_trade_reports_enabled:
         await notifier.broadcast(
             format_worker_started(
@@ -59,7 +73,10 @@ async def main() -> None:
         delay = settings.trader_loop_seconds
         try:
             async with AsyncSessionLocal() as db:
-                async with locks.lock("trader-worker-loop", ttl_seconds=max(settings.trader_loop_seconds - 5, 10)) as acquired:
+                async with locks.lock(
+                    TRADING_CYCLE_LOCK,
+                    ttl_seconds=max(settings.trader_loop_seconds - 5, 10),
+                ) as acquired:
                     if acquired:
                         user_settings = (await db.execute(select(UserSettings).order_by(UserSettings.id.asc()).limit(1))).scalar_one_or_none()
                         if not user_settings:
@@ -69,9 +86,9 @@ async def main() -> None:
                         else:
                             current_exchange = user_settings.exchange
                             exchange = ExchangeClient.from_user_settings(user_settings)
-                            engine = TradingEngine(exchange)
+                            trading_engine = TradingEngine(exchange, control=control)
                             reconciliation = OrderReconciliationService(exchange)
-                            tick = await engine.manage_open_positions(db)
+                            tick = await trading_engine.manage_open_positions(db)
                             await reconciliation.reconcile(db)
                             paused, reason = await control.is_paused()
                             if paused:
@@ -94,8 +111,13 @@ async def main() -> None:
                                     partial_take_profit_r=user_settings.partial_take_profit_r,
                                     partial_close_percent=user_settings.partial_close_percent,
                                 )
-                                run = await engine.run_once(db, risk_settings, timeframe=user_settings.scan_interval)
+                                run = await trading_engine.run_once(
+                                    db,
+                                    risk_settings,
+                                    timeframe=user_settings.scan_interval,
+                                )
                                 summary = _cycle_summary(run.scanned, run.opened, run.skipped, run.decisions, tick.closed)
+                                cycle_metrics = _cycle_metrics(run.decisions)
                                 logger.info(summary)
                                 db.add(LogEntry(level="INFO", message=summary))
                                 await db.commit()
@@ -104,7 +126,9 @@ async def main() -> None:
                                     {
                                         "scanned": run.scanned,
                                         "opened": run.opened,
+                                        "skipped": run.skipped,
                                         "closed": tick.closed,
+                                        **cycle_metrics,
                                     },
                                 )
                                 report_due = _report_due(
@@ -158,6 +182,8 @@ async def main() -> None:
         if await shutdown.wait(delay):
             break
     await heartbeat.stop()
+    await locks.close()
+    await control.close()
     logger.info("Trader worker shutdown complete")
 
 
@@ -177,15 +203,63 @@ async def _load_safety_credentials() -> SafetyCredentials | None:
 
 
 def _cycle_summary(scanned: int, opened: int, skipped: int, decisions: list, closed: int) -> str:
+    metrics = _cycle_metrics(decisions)
+    ranked = sorted(
+        decisions,
+        key=lambda decision: (decision.action == "OPENED", decision.signal in {"BUY", "SELL"}, decision.score),
+        reverse=True,
+    )
     samples = "; ".join(
         f"{decision.symbol}={decision.signal}/{decision.action}({decision.score}): {decision.reason}"
-        for decision in decisions
+        for decision in ranked[:5]
     )
     message = (
         f"Auto-trade cycle scanned={scanned} opened={opened} skipped={skipped} "
-        f"closed={closed} learning_updates={closed}"
+        f"closed={closed} learning_updates={closed} directional={metrics['directional_candidates']} "
+        f"strong_waits={metrics['strong_wait_candidates']} top_blocker={metrics['top_blocker']}"
     )
-    return f"{message}; {samples}"[:1000] if samples else message
+    return f"{message}; top_opportunities: {samples}"[:1000] if samples else message
+
+
+def _cycle_metrics(decisions: list) -> dict[str, int | str]:
+    directional = sum(decision.signal in {"BUY", "SELL"} for decision in decisions)
+    min_score = int(get_settings().paper_exploration_min_score)
+    strong_waits = sum(decision.signal == "WAIT" and decision.score >= min_score for decision in decisions)
+    blockers = Counter(
+        _cycle_blocker(decision.reason)
+        for decision in decisions
+        if decision.action == "SKIPPED"
+    )
+    top_blocker = blockers.most_common(1)[0][0] if blockers else "NONE"
+    return {
+        "directional_candidates": directional,
+        "strong_wait_candidates": strong_waits,
+        "top_blocker": top_blocker,
+    }
+
+
+def _cycle_blocker(reason: str) -> str:
+    normalized = str(reason or "").lower()
+    markers = (
+        ("position already open", "POSITION_ALREADY_OPEN"),
+        ("recovery position limit", "RECOVERY_POSITION_LIMIT"),
+        ("maximum open positions", "MAX_POSITIONS"),
+        ("per-cycle entry limit", "PAPER_LANE_CYCLE_LIMIT"),
+        ("paper exploration position limit", "PAPER_LANE_POSITION_LIMIT"),
+        ("strategy wait", "STRATEGY_WAIT"),
+        ("performance guard", "PERFORMANCE_GUARD"),
+        ("signal score below", "LOW_SCORE"),
+        ("pre-trade quality", "PRETRADE_QUALITY"),
+        ("market quality", "MARKET_QUALITY"),
+        ("micro gate", "MICROSTRUCTURE"),
+        ("committee rejected", "COMMITTEE"),
+        ("rl disagrees", "RL_DISAGREEMENT"),
+        ("learning", "LEARNING_MEMORY"),
+        ("cooldown", "COOLDOWN"),
+        ("same-side", "DIRECTIONAL_EXPOSURE"),
+        ("exposure", "EXPOSURE"),
+    )
+    return next((code for marker, code in markers if marker in normalized), "OTHER")
 
 
 def _report_due(last_sent_at: datetime | None, interval_minutes: int) -> bool:

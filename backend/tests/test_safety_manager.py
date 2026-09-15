@@ -269,6 +269,32 @@ def test_rl_worker_does_not_import_stable_baselines_service_at_module_load():
     assert "RlTrainingService" not in top_level_imports
 
 
+def test_trader_worker_keeps_database_and_trading_engines_distinct():
+    worker_path = Path(__file__).parents[1] / "app" / "trader_worker.py"
+    module = ast.parse(worker_path.read_text(encoding="utf-8"))
+    database_engine_imports = {
+        alias.asname
+        for node in module.body
+        if isinstance(node, ast.ImportFrom) and node.module == "app.db.session"
+        for alias in node.names
+        if alias.name == "engine"
+    }
+    main = next(
+        node
+        for node in module.body
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "main"
+    )
+    local_names = {
+        node.id
+        for node in ast.walk(main)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+
+    assert database_engine_imports == {"database_engine"}
+    assert "database_engine" not in local_names
+    assert "trading_engine" in local_names
+
+
 def test_stable_baselines_callback_stops_immediately_after_shutdown_flag():
     pytest.importorskip("stable_baselines3")
     from app.services.rl_training import ShutdownCallback

@@ -5,8 +5,19 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.entities import AgentDecision, Candle, LearningRule, LogEntry, Position, RlModel, Signal, StrategyOptimization
-from app.schemas.dto import LearningMilestoneOut, LearningProgressOut, TradeBlockerOut
+from app.models.entities import (
+    AgentDecision,
+    Candle,
+    LearningRule,
+    LogEntry,
+    Position,
+    RlModel,
+    ShadowTrade,
+    Signal,
+    StrategyOptimization,
+    TradePostMortem,
+)
+from app.schemas.dto import LearningMilestoneOut, LearningProgressOut, RlFleetOut, TradeBlockerOut
 from app.services.performance_guard import PerformanceGuardService
 
 
@@ -43,6 +54,19 @@ class LearningProgressService:
         signals_24h = sum(signal_counts.values())
         directional_signals = signal_counts.get("BUY", 0) + signal_counts.get("SELL", 0)
         waits = signal_counts.get("WAIT", 0)
+        strong_waits = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(Signal)
+                    .where(
+                        Signal.created_at >= cutoff_24h,
+                        Signal.signal == "WAIT",
+                        Signal.score >= settings.paper_exploration_min_score,
+                    )
+                )
+            ).scalar_one()
+        )
 
         agent_decisions_24h = int(
             (
@@ -58,9 +82,85 @@ class LearningProgressService:
         rules = list((await db.execute(select(LearningRule))).scalars().all())
         learning_observations = sum(int(rule.observations or 0) for rule in rules)
         last_learning_at = max((self._aware(rule.updated_at) for rule in rules if rule.updated_at), default=None)
+        post_mortem_row = (
+            await db.execute(
+                select(
+                    func.count(TradePostMortem.id),
+                    func.count(TradePostMortem.id).filter(TradePostMortem.strategy_followed.is_(False)),
+                    func.count(TradePostMortem.id).filter(TradePostMortem.strategy_followed.is_(True)),
+                    func.max(TradePostMortem.closed_at),
+                )
+            )
+        ).one()
+        bad_experiences = int(post_mortem_row[0] or 0)
+        avoidable_failures = int(post_mortem_row[1] or 0)
+        disciplined_stop_losses = int(post_mortem_row[2] or 0)
+        last_post_mortem_at = post_mortem_row[3]
 
-        rl_models = list((await db.execute(select(RlModel))).scalars().all())
-        active_rl_pairs = len({model.symbol for model in rl_models if model.is_active})
+        rl_symbols = settings.rl_symbols
+        rl_timeframes = settings.candle_ingest_timeframes
+        rl_status_rows = (
+            await db.execute(
+                select(RlModel.status, func.count(RlModel.id), func.max(RlModel.created_at))
+                .group_by(RlModel.status)
+            )
+        ).all()
+        rl_status_counts = {str(status).upper(): int(count) for status, count, _ in rl_status_rows}
+        rl_last_training_at = max(
+            (self._aware(created_at) for _, _, created_at in rl_status_rows if created_at),
+            default=None,
+        )
+        active_rl_records = (
+            await db.execute(
+                select(RlModel.symbol, RlModel.timeframe)
+                .where(
+                    RlModel.is_active.is_(True),
+                    RlModel.symbol.in_(rl_symbols),
+                    RlModel.timeframe.in_(rl_timeframes),
+                )
+                .distinct()
+            )
+        ).all()
+        active_rl_symbols = {str(symbol) for symbol, _ in active_rl_records}
+        rl_decision_rows = (
+            await db.execute(
+                select(AgentDecision.agent_name, func.count(AgentDecision.id))
+                .where(
+                    AgentDecision.created_at >= cutoff_24h,
+                    AgentDecision.agent_name.in_(("rl_policy", "rl_shadow")),
+                )
+                .group_by(AgentDecision.agent_name)
+            )
+        ).all()
+        rl_decision_counts = {str(agent_name): int(count) for agent_name, count in rl_decision_rows}
+        shadow_row = (
+            await db.execute(
+                select(
+                    func.count(ShadowTrade.id).filter(ShadowTrade.status == "OPEN"),
+                    func.count(ShadowTrade.id).filter(ShadowTrade.status == "CLOSED"),
+                    func.count(ShadowTrade.id).filter(ShadowTrade.status == "CLOSED", ShadowTrade.pnl > 0),
+                    func.coalesce(func.sum(ShadowTrade.pnl).filter(ShadowTrade.status == "CLOSED"), 0.0),
+                )
+            )
+        ).one()
+        shadow_open_trades = int(shadow_row[0] or 0)
+        shadow_closed_trades = int(shadow_row[1] or 0)
+        shadow_wins = int(shadow_row[2] or 0)
+        shadow_pnl = float(shadow_row[3] or 0.0)
+        rl_fleet = self.build_rl_fleet(
+            status_counts=rl_status_counts,
+            active_symbols=active_rl_symbols,
+            target_symbols=rl_symbols,
+            target_timeframes=rl_timeframes,
+            active_model_count=len(active_rl_records),
+            decision_counts=rl_decision_counts,
+            last_training_at=rl_last_training_at,
+            shadow_open_trades=shadow_open_trades,
+            shadow_closed_trades=shadow_closed_trades,
+            shadow_wins=shadow_wins,
+            shadow_pnl=shadow_pnl,
+        )
+        active_rl_pairs = rl_fleet.active_pairs
         optimized_pairs = int(
             (
                 await db.execute(select(func.count(func.distinct(StrategyOptimization.symbol))))
@@ -91,6 +191,7 @@ class LearningProgressService:
             active_rl_pairs=active_rl_pairs,
             candle_pairs_ready=candle_pairs_ready,
             candle_pairs_total=len(symbols),
+            rl_pairs_total=rl_fleet.target_pairs,
             trade_target=settings.learning_progress_target_trades,
             observation_target=settings.learning_progress_target_observations,
         )
@@ -134,11 +235,18 @@ class LearningProgressService:
             signals_24h=signals_24h,
             directional_signals_24h=directional_signals,
             waits_24h=waits,
+            strong_waits_24h=strong_waits,
+            trading_symbols=settings.market_scan_symbols,
+            excluded_symbols=settings.trading_excluded_symbols,
             agent_decisions_24h=agent_decisions_24h,
             learning_rules=len(rules),
             learning_observations=learning_observations,
+            bad_experiences=bad_experiences,
+            avoidable_failures=avoidable_failures,
+            disciplined_stop_losses=disciplined_stop_losses,
             active_rl_pairs=active_rl_pairs,
-            trained_rl_models=len(rl_models),
+            trained_rl_models=rl_fleet.total_experiments,
+            rl_fleet=rl_fleet,
             optimized_pairs=optimized_pairs,
             candle_pairs_ready=candle_pairs_ready,
             candle_pairs_total=len(symbols),
@@ -148,9 +256,63 @@ class LearningProgressService:
             last_signal_at=last_signal_at,
             last_trade_closed_at=max((self._aware(position.closed_at) for position in closed if position.closed_at), default=None),
             last_learning_at=last_learning_at,
+            last_post_mortem_at=last_post_mortem_at,
             last_agent_decision_at=last_agent_decision_at,
             milestones=milestones,
             top_blockers_24h=top_blockers,
+        )
+
+    def build_rl_fleet(
+        self,
+        *,
+        status_counts: dict[str, int],
+        active_symbols: set[str],
+        target_symbols: list[str],
+        target_timeframes: list[str],
+        active_model_count: int | None = None,
+        decision_counts: dict[str, int] | None = None,
+        last_training_at: datetime | None = None,
+        shadow_open_trades: int = 0,
+        shadow_closed_trades: int = 0,
+        shadow_wins: int = 0,
+        shadow_pnl: float = 0.0,
+    ) -> RlFleetOut:
+        normalized_counts = {
+            str(status).upper(): max(int(count), 0)
+            for status, count in status_counts.items()
+        }
+        normalized_targets = list(dict.fromkeys(str(symbol) for symbol in target_symbols if symbol))
+        active_in_scope = {symbol for symbol in active_symbols if symbol in normalized_targets}
+        historical_active_models = normalized_counts.get("ACTIVE", 0)
+        active_models = (
+            historical_active_models
+            if active_model_count is None
+            else max(int(active_model_count), 0)
+        )
+        retired_models = normalized_counts.get("RETIRED", 0)
+        promoted_experiments = historical_active_models + retired_models
+        total_experiments = sum(normalized_counts.values())
+        decisions = decision_counts or {}
+        return RlFleetOut(
+            target_pairs=len(normalized_targets),
+            target_models=len(normalized_targets) * max(len(target_timeframes), 1),
+            active_pairs=len(active_in_scope),
+            active_models=active_models,
+            shadow_models=normalized_counts.get("SHADOW", 0),
+            rejected_models=normalized_counts.get("REJECTED", 0),
+            retired_models=retired_models,
+            candidate_models=normalized_counts.get("CANDIDATE", 0),
+            total_experiments=total_experiments,
+            promoted_experiments=promoted_experiments,
+            promotion_rate_percent=round(promoted_experiments / max(total_experiments, 1) * 100, 2),
+            active_decisions_24h=max(int(decisions.get("rl_policy", 0)), 0),
+            shadow_decisions_24h=max(int(decisions.get("rl_shadow", 0)), 0),
+            shadow_open_trades=max(int(shadow_open_trades), 0),
+            shadow_closed_trades=max(int(shadow_closed_trades), 0),
+            shadow_win_rate=round(max(int(shadow_wins), 0) / max(int(shadow_closed_trades), 1) * 100, 2),
+            shadow_pnl=round(float(shadow_pnl), 4),
+            uncovered_pairs=[symbol for symbol in normalized_targets if symbol not in active_in_scope],
+            last_training_at=last_training_at,
         )
 
     def build_milestones(
@@ -163,12 +325,13 @@ class LearningProgressService:
         candle_pairs_total: int,
         trade_target: int,
         observation_target: int,
+        rl_pairs_total: int | None = None,
     ) -> list[LearningMilestoneOut]:
         return [
             self._milestone("candle_coverage", candle_pairs_ready, candle_pairs_total),
             self._milestone("trade_lessons", closed_trades, trade_target),
             self._milestone("memory_observations", learning_observations, observation_target),
-            self._milestone("active_rl_pairs", active_rl_pairs, candle_pairs_total),
+            self._milestone("active_rl_pairs", active_rl_pairs, rl_pairs_total or candle_pairs_total),
         ]
 
     def stage(
@@ -191,6 +354,7 @@ class LearningProgressService:
     def normalize_blocker(self, message: str) -> str:
         reason = message.partition(":")[2].strip().lower()
         markers = (
+            ("strategy wait", "STRATEGY_WAIT"),
             ("position already open", "POSITION_ALREADY_OPEN"),
             ("recovery position limit", "RECOVERY_POSITION_LIMIT"),
             ("performance guard", "PERFORMANCE_GUARD"),
@@ -203,6 +367,8 @@ class LearningProgressService:
             ("rl disagrees", "RL_DISAGREEMENT"),
             ("learning", "LEARNING_MEMORY"),
             ("market quality", "MARKET_QUALITY"),
+            ("micro gate", "MICROSTRUCTURE"),
+            ("committee rejected", "COMMITTEE"),
             ("same-side", "DIRECTIONAL_EXPOSURE"),
             ("exposure limit", "EXPOSURE"),
         )

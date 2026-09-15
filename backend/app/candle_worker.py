@@ -31,6 +31,15 @@ async def main() -> None:
         while True:
             try:
                 async with AsyncSessionLocal() as db:
+                    await heartbeat.set_status(
+                        "RUNNING",
+                        {
+                            "stage": "candle_ingestion",
+                            "pairs": len(settings.candle_ingest_symbols)
+                            * len(settings.candle_ingest_timeframes),
+                            "long_running": True,
+                        },
+                    )
                     async with locks.lock("candle-worker-loop", ttl_seconds=max(settings.candle_ingest_loop_seconds - 5, 30)) as acquired:
                         if acquired:
                             inserted = await history.ingest_many(
@@ -43,6 +52,11 @@ async def main() -> None:
                             db.add(LogEntry(level="INFO", message=f"Candle worker inserted {total} candle(s): {inserted}"))
                             await db.commit()
                             await heartbeat.set_status("OK", {"inserted": total})
+                        else:
+                            await heartbeat.set_status(
+                                "IDLE",
+                                {"stage": "replica_wait", "reason": "lock_owned_by_another_replica"},
+                            )
                 delay = settings.candle_ingest_loop_seconds
             except (ccxt.RateLimitExceeded, ccxt.DDoSProtection):
                 delay = _next_rate_limit_delay(delay, settings.candle_ingest_loop_seconds)
@@ -55,6 +69,7 @@ async def main() -> None:
             await asyncio.sleep(delay)
     finally:
         await heartbeat.stop()
+        await locks.close()
         await history.exchange.close()
 
 

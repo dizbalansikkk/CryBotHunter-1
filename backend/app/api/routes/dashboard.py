@@ -19,11 +19,14 @@ logger = logging.getLogger(__name__)
 @router.get("", response_model=DashboardOut)
 async def dashboard(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> DashboardOut:
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
+    exchange = ExchangeClient.from_user_settings(user_settings)
     try:
-        balance = (await ExchangeClient.from_user_settings(user_settings).get_balance()).get("USDT", 0)
+        balance = (await exchange.get_balance()).get("USDT", 0)
     except Exception:
         logger.exception("Failed to fetch dashboard exchange balance")
         balance = 0
+    finally:
+        await exchange.close()
     positions = (await db.execute(select(Position).where(Position.status == "OPEN").order_by(Position.entered_at.desc()))).scalars().all()
     pnl = await PnlMetricsService().summary(db)
     analytics = await TradeAnalyticsService().summary(db)

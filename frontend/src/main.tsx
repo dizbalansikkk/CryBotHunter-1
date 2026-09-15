@@ -5,6 +5,7 @@ import {
   BarChart3,
   Bot,
   CheckCircle2,
+  Download,
   KeyRound,
   LogOut,
   Play,
@@ -15,14 +16,15 @@ import {
   Terminal,
   XCircle
 } from "lucide-react";
-import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, RlModel, StrategyOptimization, SystemStatus, TradeAnalytics, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
+import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, RlModel, ShadowTrade, StrategyOptimization, SystemStatus, TradeAnalytics, TradePostMortem, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
 import "./styles.css";
 
 type View = "dashboard" | "market" | "agents" | "logs" | "settings";
 
 const TRADING_SYMBOLS = [
-  "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT",
-  "DOGE/USDT", "LINK/USDT", "AVAX/USDT", "DOT/USDT", "LTC/USDT", "TRX/USDT"
+  "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT",
+  "LINK/USDT", "AVAX/USDT", "DOT/USDT", "LTC/USDT", "TRX/USDT", "AAVE/USDT",
+  "UNI/USDT", "NEAR/USDT", "FET/USDT", "ONDO/USDT"
 ];
 
 function App() {
@@ -116,7 +118,7 @@ function AgentsView() {
   const [analysis, setAnalysis] = React.useState<AgentAnalysis | null>(null);
   const [decisions, setDecisions] = React.useState<AgentDecision[]>([]);
   const [activity, setActivity] = React.useState<AgentActivity | null>(null);
-  const [symbol, setSymbol] = React.useState("BTC/USDT");
+  const [symbol, setSymbol] = React.useState("ETH/USDT");
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
@@ -262,6 +264,8 @@ function DashboardView() {
   const [learningInsights, setLearningInsights] = React.useState<LearningInsights | null>(null);
   const [learningProgress, setLearningProgress] = React.useState<LearningProgress | null>(null);
   const [rlModels, setRlModels] = React.useState<RlModel[]>([]);
+  const [shadowTrades, setShadowTrades] = React.useState<ShadowTrade[]>([]);
+  const [postMortems, setPostMortems] = React.useState<TradePostMortem[]>([]);
   const [status, setStatus] = React.useState<SystemStatus | null>(null);
   const [guard, setGuard] = React.useState<PerformanceGuard | null>(null);
   const [backtest, setBacktest] = React.useState<BacktestReport | null>(null);
@@ -308,7 +312,9 @@ function DashboardView() {
       request<LearningSummary>("Память", api.get<LearningSummary>("/strategy-lab/learning-summary"), setLearningSummary),
       request<LearningInsights>("Выводы обучения", api.get<LearningInsights>("/strategy-lab/learning-insights"), setLearningInsights),
       request<LearningProgress>("Прогресс обучения", api.get<LearningProgress>("/strategy-lab/learning-progress"), setLearningProgress),
-      request<RlModel[]>("RL-модели", api.get<RlModel[]>("/strategy-lab/rl-models"), setRlModels)
+      request<RlModel[]>("RL-модели", api.get<RlModel[]>("/strategy-lab/rl-models"), setRlModels),
+      request<ShadowTrade[]>("Теневые сделки", api.get<ShadowTrade[]>("/strategy-lab/shadow-trades"), setShadowTrades),
+      request<TradePostMortem[]>("Разбор ошибок", api.get<TradePostMortem[]>("/strategy-lab/post-mortems"), setPostMortems)
     ]);
     if (loadSeq.current === seq) {
       setRefreshing(false);
@@ -352,7 +358,7 @@ function DashboardView() {
     try {
       setLoading(true);
       setError("");
-      const symbol = encodeURIComponent("BTC/USDT");
+      const symbol = encodeURIComponent("ETH/USDT");
       const { data: history } = await api.post<HistoryIngest>(`/market/history/ingest?symbol=${symbol}&timeframe=1h&limit=500`);
       setHistoryResult(history);
       const { data: report } = await api.post<BacktestReport>(`/trading/backtest?symbol=${symbol}&timeframe=1h&limit=500`);
@@ -368,7 +374,7 @@ function DashboardView() {
     try {
       setLoading(true);
       setError("");
-      const symbol = encodeURIComponent("BTC/USDT");
+      const symbol = encodeURIComponent("ETH/USDT");
       const { data } = await api.post<StrategyOptimization[]>(`/strategy-lab/optimize?symbol=${symbol}&timeframe=1h&limit=500`);
       setOptimizations(data);
     } catch (err) {
@@ -382,7 +388,7 @@ function DashboardView() {
     try {
       setLoading(true);
       setError("");
-      const symbol = encodeURIComponent("BTC/USDT");
+      const symbol = encodeURIComponent("ETH/USDT");
       const { data } = await api.post<WalkForwardReport>(`/trading/backtest/walk-forward?symbol=${symbol}&timeframe=1h&limit=1000`);
       setWalkForward(data);
     } catch (err) {
@@ -410,7 +416,7 @@ function DashboardView() {
     <section className="space-y-5">
       <Header title="Панель" subtitle="Портфель, риск-состояние и сводка работы бота">
         <button className="btn" onClick={() => void load()} disabled={refreshing}><RefreshCw size={16} /> {refreshing ? "Обновляется" : "Обновить"}</button>
-        <button className="btn" onClick={loadHistoryAndBacktest} disabled={loading}><BarChart3 size={16} /> Бэктест BTC</button>
+        <button className="btn" onClick={loadHistoryAndBacktest} disabled={loading}><BarChart3 size={16} /> Бэктест ETH</button>
         <button className="btn" onClick={runWalkForward} disabled={loading}><BarChart3 size={16} /> Walk-forward</button>
         <button className="btn" onClick={ingestBatchHistory} disabled={loading}><RefreshCw size={16} /> Загрузить свечи</button>
         <button className="btn" onClick={optimizeStrategy} disabled={loading}><Settings size={16} /> Оптимизировать</button>
@@ -457,6 +463,7 @@ function DashboardView() {
         <Metric label="Закрыто сделок за всё время" value={String(data?.analytics?.closed_trades ?? data?.trades_count ?? 0)} />
       </div>
       <LearningProgressPanel data={learningProgress} />
+      <ExperienceReplayPanel postMortems={postMortems} shadowTrades={shadowTrades} />
       <TradeAnalyticsPanel analytics={data?.analytics ?? null} />
       {run && (
         <div className="panel-block">
@@ -511,6 +518,8 @@ function DashboardView() {
 function LearningProgressPanel({ data }: { data: LearningProgress | null }) {
   const milestones = data?.milestones ?? [];
   const blockers = data?.top_blockers_24h ?? [];
+  const fleet = data?.rl_fleet;
+  const rlCoverage = fleet?.target_pairs ? Math.round((fleet.active_pairs / fleet.target_pairs) * 100) : 0;
   return (
     <div className="panel-block learning-progress-panel">
       <div className="table-title table-title-row">
@@ -535,16 +544,57 @@ function LearningProgressPanel({ data }: { data: LearningProgress | null }) {
           <Metric label="Учебные позиции открыто / закрыто" value={`${data?.exploration_open_positions ?? 0} / ${data?.exploration_closed_trades ?? 0}`} />
           <Metric label="Сигналы 24ч" value={`${data?.signals_24h ?? 0}`} />
           <Metric label="Направленные / WAIT 24ч" value={`${data?.directional_signals_24h ?? 0} / ${data?.waits_24h ?? 0}`} />
+          <Metric label="Сильные WAIT-кандидаты 24ч" value={`${data?.strong_waits_24h ?? 0}`} />
+          <Metric label="Торговые / исключённые пары" value={`${data?.trading_symbols?.length ?? 0} / ${data?.excluded_symbols?.length ?? 0}`} />
           <Metric label="Решения агентов 24ч" value={`${data?.agent_decisions_24h ?? 0}`} />
           <Metric label="Правила / наблюдения" value={`${data?.learning_rules ?? 0} / ${data?.learning_observations ?? 0}`} />
+          <Metric label="Post-mortem / исправимые ошибки" value={`${data?.bad_experiences ?? 0} / ${data?.avoidable_failures ?? 0}`} tone={(data?.avoidable_failures ?? 0) > 0 ? "bad" : undefined} />
+          <Metric label="Дисциплинированные стопы" value={`${data?.disciplined_stop_losses ?? 0}`} tone={(data?.disciplined_stop_losses ?? 0) > 0 ? "good" : undefined} />
           <Metric label="Свечи готовы по парам" value={`${data?.candle_pairs_ready ?? 0} / ${data?.candle_pairs_total ?? 0}`} />
-          <Metric label="Активные RL-пары / модели" value={`${data?.active_rl_pairs ?? 0} / ${data?.trained_rl_models ?? 0}`} />
+          <Metric label="Покрытие активных RL-пар" value={`${fleet?.active_pairs ?? 0} / ${fleet?.target_pairs ?? 0}`} tone={rlCoverage >= 80 ? "good" : "bad"} />
           <Metric label="Оптимизировано пар" value={`${data?.optimized_pairs ?? 0}`} />
           <Metric
             label="Performance guard"
             value={data?.guard_recovery_mode ? "Восстановление" : data?.guard_allowed ? "Разрешает" : "Пауза"}
             tone={data?.guard_allowed ? undefined : "bad"}
           />
+        </div>
+        <div className="rl-control-center">
+          <div className="rl-control-header">
+            <div>
+              <span className="rl-control-kicker">RL CONTROL CENTER</span>
+              <h3>Парк обучающихся моделей</h3>
+              <p className="muted">
+                Покрытие считается по торговым парам. Исторические попытки обучения показываются отдельно и больше не выглядят как «512 пар».
+              </p>
+            </div>
+            <div className={`rl-coverage-orb ${rlCoverage >= 80 ? "ready" : ""}`}>
+              <strong>{rlCoverage}%</strong>
+              <span>покрытие</span>
+            </div>
+          </div>
+          <div className="analytics-grid rl-fleet-grid">
+            <Metric label="Активные пары / цель" value={`${fleet?.active_pairs ?? 0} / ${fleet?.target_pairs ?? 0}`} tone={rlCoverage >= 80 ? "good" : "bad"} />
+            <Metric label="Активные модели" value={`${fleet?.active_models ?? 0}`} tone="good" />
+            <Metric label="Теневые модели" value={`${fleet?.shadow_models ?? 0}`} />
+            <Metric label="Всего экспериментов" value={`${fleet?.total_experiments ?? 0}`} />
+            <Metric label="Успешных повышений" value={`${fleet?.promoted_experiments ?? 0} · ${fmt(fleet?.promotion_rate_percent)}%`} tone={(fleet?.promotion_rate_percent ?? 0) > 0 ? "good" : undefined} />
+            <Metric label="Отклонено / архив" value={`${fleet?.rejected_models ?? 0} / ${fleet?.retired_models ?? 0}`} />
+            <Metric label="Решения active / shadow за 24ч" value={`${fleet?.active_decisions_24h ?? 0} / ${fleet?.shadow_decisions_24h ?? 0}`} />
+            <Metric label="Виртуальные позиции open / closed" value={`${fleet?.shadow_open_trades ?? 0} / ${fleet?.shadow_closed_trades ?? 0}`} />
+            <Metric label="Shadow Win Rate / PnL" value={`${fmt(fleet?.shadow_win_rate)}% / $${fmt(fleet?.shadow_pnl)}`} tone={(fleet?.shadow_pnl ?? 0) >= 0 ? "good" : "bad"} />
+            <Metric label="Последнее обучение" value={formatDateTime(fleet?.last_training_at)} />
+          </div>
+          <div className="rl-pair-coverage">
+            <div>
+              <strong>{fleet?.uncovered_pairs?.length ? "Пары в очереди на безопасное обучение" : "Все настроенные пары покрыты"}</strong>
+              <span className="muted">Теневая модель не имеет права открывать сделки, пока не пройдёт validation.</span>
+            </div>
+            <div className="rl-pair-chips">
+              {(fleet?.uncovered_pairs ?? []).map((symbol) => <span className="pill" key={symbol}>{symbol}</span>)}
+              {!fleet?.uncovered_pairs?.length && <span className="pill buy">Готово</span>}
+            </div>
+          </div>
         </div>
         <div className="learning-milestones">
           {milestones.map((item) => (
@@ -556,6 +606,9 @@ function LearningProgressPanel({ data }: { data: LearningProgress | null }) {
         </div>
         <div className="learning-guard-note">
           <strong>Сейчас:</strong> {data?.guard_reason ?? "данные загружаются"}. Учебный контур работает только в paper-режиме и не ослабляет live-правила.
+          {!!data?.excluded_symbols?.length && (
+            <span> Исключено из новых входов, RL и shadow: <strong>{data.excluded_symbols.join(", ")}</strong>.</span>
+          )}
         </div>
       </div>
       <div className="table-title">Почему входы чаще всего не открылись за 24 часа</div>
@@ -566,6 +619,55 @@ function LearningProgressPanel({ data }: { data: LearningProgress | null }) {
           {!blockers.length && <EmptyRow cols={2} text="Отказы ещё не накопились — бот продолжает сканирование" />}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ExperienceReplayPanel({ postMortems, shadowTrades }: { postMortems: TradePostMortem[]; shadowTrades: ShadowTrade[] }) {
+  return (
+    <div className="experience-grid">
+      <div className="table-wrap experience-card">
+        <div className="table-title">BAD EXPERIENCE REPLAY · разбор убыточных сделок</div>
+        <p className="muted">Каждая ошибка получает причину, поведенческий reward и приоритет повторного изучения. Правильный стоп отмечается отдельно и не считается плохой дисциплиной.</p>
+        <table>
+          <thead><tr><th>Сделка</th><th>Причина</th><th>Результат</th><th>Reward</th><th>Приоритет</th><th>Повторы</th><th>Главный урок</th></tr></thead>
+          <tbody>
+            {postMortems.map((item) => (
+              <tr key={item.id}>
+                <td><strong>{item.symbol}</strong><br /><span className="muted">#{item.position_id} · {formatDateTime(item.closed_at)}</span></td>
+                <td><span className={`pill ${item.strategy_followed ? "buy" : "sell"}`}>{postMortemLabel(item.primary_label)}</span></td>
+                <td className="text-danger">${fmt(item.pnl)} · {fmt(item.result_r)}R</td>
+                <td className={item.shaped_reward >= 0 ? "text-accent" : "text-danger"}>{fmt(item.shaped_reward)}</td>
+                <td>{fmt(item.priority)}</td>
+                <td>{item.replay_count}</td>
+                <td>{item.lessons[0] ?? "Пример сохранён; данных пока мало для точного вывода."}</td>
+              </tr>
+            ))}
+            {!postMortems.length && <EmptyRow cols={7} text="Убыточных закрытых сделок после включения Post-Mortem пока нет" />}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-wrap experience-card">
+        <div className="table-title">SHADOW FORWARD TEST · виртуальные сделки без ордеров</div>
+        <p className="muted">Теневая модель получает право торговать только после реальных forward-наблюдений: PnL, Profit Factor, Win Rate и просадка проверяются до повышения.</p>
+        <table>
+          <thead><tr><th>Модель</th><th>Пара</th><th>Сторона</th><th>Статус</th><th>PnL</th><th>Уверенность</th><th>Время</th></tr></thead>
+          <tbody>
+            {shadowTrades.map((item) => (
+              <tr key={item.id}>
+                <td>#{item.model_id}</td>
+                <td><strong>{item.symbol}</strong></td>
+                <td><span className={`pill ${item.side === "LONG" ? "buy" : "sell"}`}>{translateAction(item.side)}</span></td>
+                <td><span className={`pill ${item.status === "OPEN" ? "" : item.pnl >= 0 ? "buy" : "sell"}`}>{translateStatus(item.status)}</span></td>
+                <td className={item.pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(item.pnl)}</td>
+                <td>{fmt(item.confidence * 100)}%</td>
+                <td>{formatDateTime(item.closed_at ?? item.entered_at)}</td>
+              </tr>
+            ))}
+            {!shadowTrades.length && <EmptyRow cols={7} text="Теневые модели ещё не открыли виртуальные позиции" />}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -813,24 +915,33 @@ function RlModelsTable({ items }: { items: RlModel[] }) {
       <div className="table-title">RL-агент Stable Baselines3</div>
       <table>
         <thead>
-          <tr><th>Пара</th><th>Модель</th><th>Статус</th><th>Train / Validation</th><th>Доходность</th><th>Profit Factor</th><th>Просадка</th><th>Сделки</th><th>Источник</th><th>Причина</th></tr>
+          <tr><th>Пара</th><th>Модель</th><th>Статус</th><th>Train / Validation</th><th>Доходность</th><th>Profit Factor</th><th>Просадка</th><th>Сделки</th><th>Forward test</th><th>Bad replay</th><th>Источник</th><th>Причина</th></tr>
         </thead>
         <tbody>
           {items.map((item) => (
             <tr key={item.id}>
               <td className="font-semibold">{item.symbol} / {item.timeframe}</td>
               <td>{item.algorithm} #{item.id}</td>
-              <td><span className={`pill ${item.is_active ? "buy" : "sell"}`}>{item.is_active ? "Активна" : item.status === "RETIRED" ? "Архив" : "Отклонена"}</span></td>
+              <td>
+                <span className={`pill ${item.is_active ? "buy" : item.status === "REJECTED" ? "sell" : ""}`}>
+                  {item.is_active ? "Активна" : item.status === "SHADOW" ? "Тень · без торговли" : item.status === "RETIRED" ? "Архив" : item.status === "CANDIDATE" ? "Обучается" : "Отклонена"}
+                </span>
+              </td>
               <td>{item.training_candles.toLocaleString()} / {item.validation_candles.toLocaleString()}</td>
               <td className={(item.metrics.return_percent ?? 0) >= 0 ? "text-accent" : "text-danger"}>{fmt(item.metrics.return_percent)}%</td>
               <td>{fmt(item.metrics.profit_factor)}</td>
               <td className="text-danger">{fmt(item.metrics.max_drawdown_percent)}%</td>
               <td>{item.metrics.trades ?? 0}</td>
+              <td>
+                {item.metrics.forward_status ?? "-"}
+                {item.metrics.forward && <div className="muted">{item.metrics.forward.closed_trades ?? 0} сделок · PF {fmt(item.metrics.forward.profit_factor)} · ${fmt(item.metrics.forward.total_pnl)}</div>}
+              </td>
+              <td>{item.metrics.bad_experiences_seen ?? 0} примеров · {item.metrics.replay_weighted_candles ?? 0} свечей · {item.metrics.curriculum_stages?.length ?? 0} этапа</td>
               <td>{item.metrics.market_data_source === "ccxt" ? "Реальный рынок" : item.metrics.market_data_source ?? "-"}</td>
               <td>{item.metrics.promotion_reason ?? "-"}</td>
             </tr>
           ))}
-          {!items.length && <EmptyRow cols={10} text="RL-моделей пока нет. Тренер ожидает достаточную историю реальных свечей." />}
+          {!items.length && <EmptyRow cols={12} text="RL-моделей пока нет. Тренер ожидает достаточную историю реальных свечей." />}
         </tbody>
       </table>
     </div>
@@ -963,6 +1074,7 @@ function MarketView() {
 function LogsView() {
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [error, setError] = React.useState("");
+  const [exporting, setExporting] = React.useState(false);
   const load = React.useCallback(async () => {
     try {
       setError("");
@@ -972,12 +1084,37 @@ function LogsView() {
     }
   }, []);
   React.useEffect(() => void load(), [load]);
+  async function downloadTradingAudit() {
+    try {
+      setExporting(true);
+      setError("");
+      const response = await api.get<Blob>("/logs/trading-audit", { responseType: "blob" });
+      const disposition = String(response.headers["content-disposition"] ?? "");
+      const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? "crybothunter-trading-audit.zip";
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setExporting(false);
+    }
+  }
   return (
     <section className="space-y-5">
       <Header title="Логи" subtitle="Сигналы, торговые действия и события системы">
+        <button className="btn primary" onClick={downloadTradingAudit} disabled={exporting}>
+          <Download size={16} /> {exporting ? "Готовим архив" : "Выгрузить аудит сделок"}
+        </button>
         <button className="btn" onClick={load}><RefreshCw size={16} /> Обновить</button>
       </Header>
       {error && <Alert tone="danger" text={error} />}
+      <Alert tone="good" text="Архив содержит все позиции, исполнения, ордера, комиссии, причины входа, голоса агентов, post-mortem и события закрытия." />
       <div className="table-wrap">
         <table>
           <thead><tr><th>Время</th><th>Уровень</th><th>Сообщение</th></tr></thead>
@@ -1248,6 +1385,9 @@ function blockerLabel(value: string) {
     RL_DISAGREEMENT: "RL-модель не согласна с направлением",
     LEARNING_MEMORY: "Память распознала слабый/убыточный паттерн",
     MARKET_QUALITY: "Недостаточная ликвидность или качество рынка",
+    STRATEGY_WAIT: "Стратегии не хватило подтверждений направления",
+    MICROSTRUCTURE: "Стакан и лента не подтвердили точку входа",
+    COMMITTEE: "Ансамбль агентов не набрал консенсус 75%",
     DIRECTIONAL_EXPOSURE: "Слишком много позиций в одну сторону",
     EXPOSURE: "Лимит общей или парной экспозиции",
     OTHER: "Другая защитная проверка"
@@ -1288,6 +1428,19 @@ function translateAction(value: string) {
   return labels[value] ?? value;
 }
 
+function postMortemLabel(value: string) {
+  const labels: Record<string, string> = {
+    EARLY_EXIT_FROM_PROFIT: "Ранний выход после прибыли",
+    HELD_AFTER_EARLY_INVALIDATION: "Удержание после инвалидирования",
+    ENTRY_AGAINST_ORDER_FLOW: "Вход против стакана и ленты",
+    LATE_ENTRY_EXHAUSTION: "Запоздалый вход в истощённый импульс",
+    EXECUTION_COST_DAMAGE: "Издержки съели риск",
+    VALID_STOP: "Правильный стоп по плану",
+    UNCLASSIFIED_LOSS: "Причина уточняется"
+  };
+  return labels[value] ?? value.replace(/_/g, " ");
+}
+
 function translateStatus(value: string) {
   const labels: Record<string, string> = {
     NEW: "Новый",
@@ -1314,7 +1467,10 @@ function translateFeature(value: string) {
     momentum_profile: "Профиль импульса",
     risk_profile: "Профиль риска",
     setup_signature: "Сетап",
-    exit_reason: "Причина выхода"
+    exit_reason: "Причина выхода",
+    post_mortem_primary_label: "Главная причина ошибки",
+    post_mortem_behavior: "Поведенческая ошибка",
+    strategy_followed: "Соблюдение стратегии"
   };
   return labels[value] ?? value;
 }
@@ -1356,7 +1512,7 @@ function translateFeatureValue(value: string): string {
     negative: "Отрицательный",
     flat: "Плоский"
   };
-  return translateStatus(labels[value] ?? value);
+  return translateStatus(labels[value] ?? postMortemLabel(value));
 }
 
 function translateRegime(value: string) {

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 from hashlib import sha256
 from random import Random
@@ -25,7 +26,15 @@ class MarketScanner:
 
     async def scan(self, symbols: list[str] | None = None) -> list[MarketCoin]:
         settings = get_settings()
-        symbols = symbols or settings.market_scan_symbols
+        requested_symbols = settings.market_scan_symbols if symbols is None else symbols
+        is_excluded = getattr(settings, "is_symbol_excluded", lambda _symbol: False)
+        symbols = [
+            symbol
+            for symbol in dict.fromkeys(str(item).strip().upper() for item in requested_symbols if item)
+            if not is_excluded(symbol)
+        ]
+        if not symbols:
+            return []
         if settings.uses_live_market_data:
             return await self._scan_ccxt(symbols)
         rows = [self._synthetic_row(symbol) for symbol in symbols]
@@ -107,12 +116,21 @@ class MarketScanner:
 
         # Spot tickers do not expose futures open interest. Missing optional
         # derivatives data must not make a high-quality spot setup impossible.
-        volume_score = min(quote_volume / 2_000_000_000 * 25, 25)
-        trend_score = min(10 + trend_separation * 5, 20)
-        volatility_score = max(0, 20 - abs(atr_percent - 3) * 4)
-        momentum_score = min(abs(float(row["price_change_percent"])) * 4, 20)
+        settings = get_settings()
+        hard_volume = max(float(settings.market_quality_hard_min_quote_volume), 1.0)
+        target_volume = max(float(settings.market_quality_min_quote_volume), hard_volume * 1.01)
+        if quote_volume < hard_volume:
+            volume_score = 0.0
+        else:
+            volume_progress = math.log10(max(quote_volume / hard_volume, 1.0)) / math.log10(
+                target_volume / hard_volume
+            )
+            volume_score = 5 + min(max(volume_progress, 0.0), 1.0) * 15
+        trend_score = min(10 + trend_separation * 7.5, 25)
+        volatility_score = max(0, 20 - abs(atr_percent - 2.5) * 5)
+        momentum_score = min(abs(float(row["price_change_percent"])) * 2.5, 15)
         depth_score = min(open_interest / 1_000_000_000 * 5, 5) if open_interest > 0 else 5
-        spread_score = 5 if spread_bps <= 0 else max(0, 5 - spread_bps / 5)
+        spread_score = 15 if spread_bps <= 0 else max(0, 15 - spread_bps / 2)
         score = round(volume_score + trend_score + volatility_score + momentum_score + depth_score + spread_score)
         return int(max(0, min(100, score)))
 

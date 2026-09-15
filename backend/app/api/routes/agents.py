@@ -14,7 +14,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 @router.post("/analyze", response_model=AgentAnalysisOut)
 async def analyze_symbol(
-    symbol: str = "BTC/USDT",
+    symbol: str = "ETH/USDT",
     _: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AgentAnalysisOut:

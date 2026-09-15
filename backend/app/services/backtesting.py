@@ -82,6 +82,7 @@ class BacktestingService:
             ]
         )
         frame = self.scanner.calculate_indicators(frame).dropna().reset_index(drop=True)
+        frame["volume_average"] = frame["volume"].rolling(20, min_periods=1).mean()
         profits: list[float] = []
         position: dict | None = None
         for _, row in frame.iterrows():
@@ -96,7 +97,11 @@ class BacktestingService:
                     elif row["high"] >= position["take"]:
                         exit_price = position["take"]
                     if exit_price is not None:
-                        exit_fill = self._apply_slippage(exit_price, "sell", effective_slippage_bps)
+                        exit_fill = self._apply_slippage(
+                            exit_price,
+                            "sell",
+                            self._dynamic_slippage_bps(row, effective_slippage_bps),
+                        )
                         profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
                         position = None
                 else:
@@ -108,7 +113,11 @@ class BacktestingService:
                     elif row["low"] <= position["take"]:
                         exit_price = position["take"]
                     if exit_price is not None:
-                        exit_fill = self._apply_slippage(exit_price, "buy", effective_slippage_bps)
+                        exit_fill = self._apply_slippage(
+                            exit_price,
+                            "buy",
+                            self._dynamic_slippage_bps(row, effective_slippage_bps),
+                        )
                         profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
                         position = None
                 if position:
@@ -134,7 +143,11 @@ class BacktestingService:
             if signal.signal in {"BUY", "SELL"}:
                 entry = float(row["close"])
                 entry_side = "buy" if signal.signal == "BUY" else "sell"
-                entry_fill = self._apply_slippage(entry, entry_side, effective_slippage_bps)
+                entry_fill = self._apply_slippage(
+                    entry,
+                    entry_side,
+                    self._dynamic_slippage_bps(row, effective_slippage_bps),
+                )
                 stop = entry_fill * (1 - stop_loss_percent / 100) if signal.signal == "BUY" else entry_fill * (1 + stop_loss_percent / 100)
                 take = entry_fill * (1 + take_profit_percent / 100) if signal.signal == "BUY" else entry_fill * (1 - take_profit_percent / 100)
                 volume = risk_per_trade / abs(entry_fill - stop)
@@ -207,6 +220,19 @@ class BacktestingService:
     def _apply_slippage(self, price: float, side: str, slippage_bps: float) -> float:
         direction = 1 if side.lower() == "buy" else -1
         return price * (1 + direction * slippage_bps / 10_000)
+
+    def _dynamic_slippage_bps(self, row, base_slippage_bps: float) -> float:
+        close = max(float(row.get("close") or 0.0), 1e-12)
+        candle_range_bps = max((float(row.get("high") or close) - float(row.get("low") or close)) / close * 10_000, 0.0)
+        intrabar_move_bps = abs(float(row.get("close") or close) - float(row.get("open") or close)) / close * 10_000
+        latency_share = min(max(float(self.settings.execution_latency_ms), 0.0) / 3_600_000, 0.05)
+        volume = max(float(row.get("volume") or 0.0), 1e-12)
+        average_volume = max(float(row.get("volume_average") or volume), 1e-12)
+        thin_liquidity_multiplier = min(max(average_volume / volume, 1.0), 4.0)
+        spread_proxy = min(candle_range_bps * 0.02, 12.0)
+        latency_cost = min(intrabar_move_bps * latency_share, 8.0)
+        impact = float(self.settings.execution_market_impact_bps) * thin_liquidity_multiplier
+        return round(max(float(base_slippage_bps), 0.0) + spread_proxy + latency_cost + impact, 4)
 
     def _profit_after_costs(self, position: dict, exit_price: float, fee_rate: float) -> float:
         if position["side"] == "LONG":

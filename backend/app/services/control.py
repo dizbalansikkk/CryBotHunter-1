@@ -31,3 +31,8 @@ class TradingControlService:
             # The panic state is safety-critical. If Redis cannot confirm that
             # entries are allowed, fail closed until coordination is restored.
             return True, "redis_unavailable"
+
+    async def close(self) -> None:
+        close = getattr(self.redis, "aclose", None)
+        if callable(close):
+            await close()

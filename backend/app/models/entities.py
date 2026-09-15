@@ -202,6 +202,55 @@ class RlModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ShadowTrade(Base):
+    __tablename__ = "shadow_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("rl_models.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(16), index=True)
+    side: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16), index=True, default="OPEN")
+    entry_price: Mapped[float] = mapped_column(Float)
+    current_price: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    take: Mapped[float] = mapped_column(Float)
+    fee: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage: Mapped[float] = mapped_column(Float, default=0.0)
+    pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    entry_context: Mapped[dict] = mapped_column(JSON, default=dict)
+    exit_reason: Mapped[str | None] = mapped_column(String(32))
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class TradePostMortem(Base):
+    __tablename__ = "trade_post_mortems"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position_id: Mapped[int] = mapped_column(ForeignKey("positions.id"), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str] = mapped_column(String(8))
+    pnl: Mapped[float] = mapped_column(Float)
+    planned_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    result_r: Mapped[float] = mapped_column(Float, default=0.0)
+    shaped_reward: Mapped[float] = mapped_column(Float, default=0.0)
+    priority: Mapped[float] = mapped_column(Float, default=1.0, index=True)
+    primary_label: Mapped[str] = mapped_column(String(64), index=True)
+    behavior_labels: Mapped[list] = mapped_column(JSON, default=list)
+    strategy_followed: Mapped[bool] = mapped_column(Boolean, default=False)
+    market_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    execution_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    reward_components: Mapped[dict] = mapped_column(JSON, default=dict)
+    lessons: Mapped[list] = mapped_column(JSON, default=list)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    replay_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class LearningRule(Base):
     __tablename__ = "learning_rules"
     __table_args__ = (UniqueConstraint("scope", "side", "feature_key", "feature_value", name="uq_learning_rule"),)

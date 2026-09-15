@@ -1,3 +1,4 @@
+import asyncio
 from itertools import product
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -25,6 +26,37 @@ class StrategyOptimizerService:
             await self.history.ingest(db, symbol=symbol, timeframe=timeframe, limit=limit)
             candles = await self.history.load(db, symbol=symbol, timeframe=timeframe, limit=limit)
 
+        top = await asyncio.to_thread(
+            self._candidate_results,
+            candles,
+            symbol,
+            timeframe,
+            top_n,
+        )
+        for item in top:
+            db.add(
+                StrategyOptimization(
+                    symbol=item.symbol,
+                    timeframe=item.timeframe,
+                    parameters=item.parameters,
+                    score=item.score,
+                    win_rate=item.win_rate,
+                    profit_factor=item.profit_factor,
+                    max_drawdown=item.max_drawdown,
+                    total_profit=item.total_profit,
+                    trades_count=item.trades_count,
+                )
+            )
+        await db.commit()
+        return top
+
+    def _candidate_results(
+        self,
+        candles: list,
+        symbol: str,
+        timeframe: str,
+        top_n: int,
+    ) -> list[StrategyOptimizationOut]:
         train_candles, validation_candles = self._split_train_validation(candles)
         candidates: list[StrategyOptimizationOut] = []
         stop_values = [1.0, 1.5, 2.0]
@@ -64,23 +96,7 @@ class StrategyOptimizerService:
                 )
             )
 
-        top = sorted(candidates, key=lambda item: item.score, reverse=True)[:top_n]
-        for item in top:
-            db.add(
-                StrategyOptimization(
-                    symbol=item.symbol,
-                    timeframe=item.timeframe,
-                    parameters=item.parameters,
-                    score=item.score,
-                    win_rate=item.win_rate,
-                    profit_factor=item.profit_factor,
-                    max_drawdown=item.max_drawdown,
-                    total_profit=item.total_profit,
-                    trades_count=item.trades_count,
-                )
-            )
-        await db.commit()
-        return top
+        return sorted(candidates, key=lambda item: item.score, reverse=True)[: max(int(top_n), 1)]
 
     async def recent(self, db: AsyncSession, limit: int = 20) -> list[StrategyOptimization]:
         result = await db.execute(select(StrategyOptimization).order_by(StrategyOptimization.created_at.desc()).limit(limit))

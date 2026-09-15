@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.schemas.dto import MarketCoin
 
 
@@ -24,7 +25,8 @@ class MarketRegimeDetector:
 
         atr_percent = atr / max(price, 1) * 100
         open_interest_too_thin = 0 < open_interest < 100_000_000
-        if volume < 100_000_000 or open_interest_too_thin:
+        hard_volume_floor = max(float(get_settings().market_quality_hard_min_quote_volume), 0.0)
+        if volume < hard_volume_floor or open_interest_too_thin:
             return MarketRegime("LOW_LIQUIDITY", 20, "Available volume or open interest is too thin.")
         if atr_percent > 8 or abs(funding) > 0.08:
             return MarketRegime("HIGH_VOLATILITY", 25, "ATR or funding risk is too high.")

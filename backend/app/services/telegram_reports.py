@@ -212,6 +212,7 @@ def format_trade_closed(position: Position, *, exit_price: float, reason: str) -
         if exploration or context
         else "Результат сохранён в истории сделок."
     )
+    post_mortem_block = _post_mortem_summary(context)
     heading = "✅ ПОЗИЦИЯ ЗАКРЫТА" if pnl >= 0 else "🔴 ПОЗИЦИЯ ЗАКРЫТА С УБЫТКОМ"
     return (
         f"<b>{heading}</b>\n"
@@ -231,6 +232,7 @@ def format_trade_closed(position: Position, *, exit_price: float, reason: str) -
         f"└ {_html(_close_explanation(position.side, exit_price, position.entry_price, reason))}\n\n"
         f"<b>Условия входа</b>\n{_html(_entry_context_summary(context))}\n"
         f"<b>Первоначальные факторы</b>\n{_html(_entry_reason_summary(context))}\n\n"
+        f"{post_mortem_block}"
         f"<i>{_html(learning)}</i>"
     )
 
@@ -541,6 +543,25 @@ def _entry_reason_summary(context: dict) -> str:
     return "; ".join(human_reason(str(reason)) for reason in reasons[:5])
 
 
+def _post_mortem_summary(context: dict) -> str:
+    post_mortem = context.get("post_mortem") if isinstance(context, dict) else None
+    if not isinstance(post_mortem, dict):
+        return ""
+    label = str(post_mortem.get("primary_label") or "UNCLASSIFIED_LOSS").replace("_", " ")
+    reward = float(post_mortem.get("shaped_reward") or 0.0)
+    priority = float(post_mortem.get("priority") or 1.0)
+    lessons = post_mortem.get("lessons") if isinstance(post_mortem.get("lessons"), list) else []
+    lesson = str(lessons[0]) if lessons else "Пример сохранён для Bad Experience Replay."
+    discipline = "да" if post_mortem.get("strategy_followed") else "нет"
+    return (
+        "<b>Post-Mortem · обучение на ошибке</b>\n"
+        f"├ Класс: <code>{_html(label)}</code>\n"
+        f"├ Поведенческий reward: <code>{reward:+.2f}</code> · приоритет {priority:.2f}\n"
+        f"├ Стратегия соблюдена: <code>{discipline}</code>\n"
+        f"└ {_html(lesson)}\n\n"
+    )
+
+
 def _duration(start: datetime | None, end: datetime | None) -> str:
     if not start:
         return "неизвестно"
@@ -568,6 +589,7 @@ def _duration_seconds(seconds: int) -> str:
 def worker_status_label(status: str) -> str:
     labels = {
         "STARTING": "запускается",
+        "MISSING": "не запущен",
         "RUNNING": "выполняет цикл",
         "TRAINING": "обучает RL-модель",
         "IDLE": "ожидает следующий цикл",
@@ -586,10 +608,16 @@ def worker_detail_summary(detail: dict) -> str:
         return "дополнительных данных нет"
     stage_labels = {
         "startup": "инициализация процесса",
+        "awaiting_first_heartbeat": "ожидание первого heartbeat",
+        "candle_ingestion": "загрузка рыночных свечей",
+        "optimizer_cycle": "подготовка цикла оптимизации",
+        "optimizing_strategy": "проверка параметров стратегии",
+        "replica_wait": "цикл выполняет другая реплика",
         "cycle_start": "подготовка нового цикла",
         "checking_model": "проверка свежести модели",
         "ppo_training": "PPO-обучение и validation",
         "publishing_decision": "расчёт свежего RL-решения",
+        "training_deferred": "обучение поставлено в безопасную очередь",
         "cycle_complete": "цикл завершён",
         "cycle_failed": "цикл аварийно завершён",
     }
@@ -603,10 +631,15 @@ def worker_detail_summary(detail: dict) -> str:
         parts.append(f"прогресс {detail['progress']}")
     if stage == "cycle_complete":
         parts.append(
-            "обучено {trained}, принято {promoted}, решений {decisions}, ошибок {errors}".format(
+            "обучено {trained}, принято {promoted}, в тени {shadowed}, "
+            "активных решений {decisions}, теневых {shadow_decisions}, "
+            "в очереди {deferred}, ошибок {errors}".format(
                 trained=int(detail.get("trained", 0)),
                 promoted=int(detail.get("promoted", 0)),
+                shadowed=int(detail.get("shadowed", 0)),
                 decisions=int(detail.get("decisions", 0)),
+                shadow_decisions=int(detail.get("shadow_decisions", 0)),
+                deferred=int(detail.get("training_deferred", 0)),
                 errors=int(detail.get("errors", 0)),
             )
         )

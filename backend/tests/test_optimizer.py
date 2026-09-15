@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import app.services.optimizer as optimizer_module
 from app.models.entities import StrategyOptimization
 from app.services.backtesting import BacktestReport
 from app.services.optimizer import StrategyOptimizerService
@@ -151,6 +152,47 @@ def test_optimizer_reason_includes_validation_metrics():
 
     assert "valPF=1.40" in reason
     assert "valPnL=24.50" in reason
+
+
+@pytest.mark.asyncio
+async def test_optimizer_moves_cpu_bound_candidate_search_off_event_loop(monkeypatch):
+    service = StrategyOptimizerService()
+
+    class History:
+        async def load(self, *_args, **_kwargs):
+            return [object()] * 220
+
+        async def ingest(self, *_args, **_kwargs):
+            raise AssertionError("dataset is already ready")
+
+    class Db:
+        committed = False
+
+        def add(self, _item):
+            raise AssertionError("empty candidate result should not add rows")
+
+        async def commit(self):
+            self.committed = True
+
+    service.history = History()
+    offloaded = []
+
+    def candidate_results(candles, symbol, timeframe, top_n):
+        assert len(candles) == 220
+        assert (symbol, timeframe, top_n) == ("ETH/USDT", "1h", 5)
+        return []
+
+    async def fake_to_thread(function, *args):
+        offloaded.append(function)
+        return function(*args)
+
+    monkeypatch.setattr(service, "_candidate_results", candidate_results)
+    monkeypatch.setattr(optimizer_module.asyncio, "to_thread", fake_to_thread)
+    db = Db()
+
+    assert await service.optimize(db, "ETH/USDT", "1h", top_n=5) == []
+    assert offloaded == [candidate_results]
+    assert db.committed
 
 
 @pytest.mark.asyncio

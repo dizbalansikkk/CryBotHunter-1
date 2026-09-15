@@ -257,6 +257,55 @@ class RlModelOut(BaseModel):
     created_at: datetime | None = None
 
 
+class ShadowTradeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    model_id: int
+    symbol: str
+    timeframe: str
+    side: str
+    status: str
+    entry_price: float
+    current_price: float
+    volume: float
+    stop: float
+    take: float
+    fee: float
+    slippage: float
+    pnl: float
+    confidence: float
+    entry_context: dict
+    exit_reason: str | None = None
+    entered_at: datetime
+    closed_at: datetime | None = None
+
+
+class TradePostMortemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    position_id: int
+    symbol: str
+    side: str
+    pnl: float
+    planned_risk: float
+    result_r: float
+    shaped_reward: float
+    priority: float
+    primary_label: str
+    behavior_labels: list[str] = Field(default_factory=list)
+    strategy_followed: bool
+    market_snapshot: dict
+    execution_snapshot: dict
+    reward_components: dict
+    lessons: list[str] = Field(default_factory=list)
+    entered_at: datetime
+    closed_at: datetime
+    replay_count: int
+    created_at: datetime | None = None
+
+
 class LearningRuleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -326,6 +375,28 @@ class TradeBlockerOut(BaseModel):
     count: int
 
 
+class RlFleetOut(BaseModel):
+    target_pairs: int
+    target_models: int
+    active_pairs: int
+    active_models: int
+    shadow_models: int
+    rejected_models: int
+    retired_models: int
+    candidate_models: int
+    total_experiments: int
+    promoted_experiments: int
+    promotion_rate_percent: float
+    active_decisions_24h: int
+    shadow_decisions_24h: int
+    shadow_open_trades: int = 0
+    shadow_closed_trades: int = 0
+    shadow_win_rate: float = 0.0
+    shadow_pnl: float = 0.0
+    uncovered_pairs: list[str] = Field(default_factory=list)
+    last_training_at: datetime | None = None
+
+
 class LearningProgressOut(BaseModel):
     stage: Literal["COLLECTING", "CALIBRATING", "LEARNING", "MATURE"]
     overall_progress_percent: float
@@ -340,11 +411,18 @@ class LearningProgressOut(BaseModel):
     signals_24h: int
     directional_signals_24h: int
     waits_24h: int
+    strong_waits_24h: int
+    trading_symbols: list[str]
+    excluded_symbols: list[str]
     agent_decisions_24h: int
     learning_rules: int
     learning_observations: int
+    bad_experiences: int
+    avoidable_failures: int
+    disciplined_stop_losses: int
     active_rl_pairs: int
     trained_rl_models: int
+    rl_fleet: RlFleetOut
     optimized_pairs: int
     candle_pairs_ready: int
     candle_pairs_total: int
@@ -354,6 +432,7 @@ class LearningProgressOut(BaseModel):
     last_signal_at: datetime | None = None
     last_trade_closed_at: datetime | None = None
     last_learning_at: datetime | None = None
+    last_post_mortem_at: datetime | None = None
     last_agent_decision_at: datetime | None = None
     milestones: list[LearningMilestoneOut] = Field(default_factory=list)
     top_blockers_24h: list[TradeBlockerOut] = Field(default_factory=list)

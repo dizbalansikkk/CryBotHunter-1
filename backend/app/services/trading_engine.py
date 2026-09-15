@@ -18,10 +18,12 @@ from app.services.execution import ExecutionService
 from app.services.learning import LearningService
 from app.services.market_quality import MarketQualityGate
 from app.services.market_scanner import MarketScanner
+from app.services.microstructure import EntryGatekeeper, MicrostructureService
 from app.services.optimizer import StrategyOptimizerService
 from app.services.performance_guard import PerformanceGuardReport, PerformanceGuardService
 from app.services.pnl import PnlMetricsService
 from app.services.pretrade_quality import PreTradeQualityGate
+from app.services.post_mortem import PostMortemService
 from app.services.risk_manager import DrawdownAssessment, RiskManager, RiskSettings
 from app.services.rl_gate import RlDecisionGate
 from app.services.strategy import StrategyCore
@@ -39,10 +41,16 @@ logger = logging.getLogger(__name__)
 
 
 class TradingEngine:
-    def __init__(self, exchange: ExchangeClient | None = None) -> None:
+    def __init__(
+        self,
+        exchange: ExchangeClient | None = None,
+        control: TradingControlService | None = None,
+    ) -> None:
         self.exchange = exchange or ExchangeClient()
         self.scanner = MarketScanner(self.exchange)
         self.market_quality = MarketQualityGate()
+        self.microstructure = MicrostructureService(self.exchange)
+        self.entry_gatekeeper = EntryGatekeeper()
         self.strategy = StrategyCore()
         self.optimizer = StrategyOptimizerService()
         self.risk = RiskManager()
@@ -54,10 +62,16 @@ class TradingEngine:
         self.quality_gate = PreTradeQualityGate()
         self.agents = AgentOrchestrator()
         self.learning = LearningService()
+        self.post_mortem = PostMortemService(self.exchange)
         self.telegram = TelegramNotifier()
         self.context = ContextManager()
-        self.control = TradingControlService()
+        self.control = control or TradingControlService()
+        self._owns_control = control is None
         self.settings = get_settings()
+
+    async def close(self) -> None:
+        if self._owns_control:
+            await self.control.close()
 
     async def _position_card(
         self,
@@ -127,6 +141,7 @@ class TradingEngine:
             trade_settings = self._guard_recovery_settings(settings, guard)
             optimizer_reason = ""
             committee: AgentAnalysisOut | None = None
+            entry_snapshot: dict = {}
 
             if exploration:
                 trade_settings = self._paper_exploration_settings(trade_settings)
@@ -149,6 +164,8 @@ class TradingEngine:
                 accepted, reason = False, "paper exploration cooldown is active"
             else:
                 accepted, reason = self.risk.can_open(signal, trade_settings, open_count, daily_pnl)
+                if not accepted and signal.signal == "WAIT":
+                    reason = self._strategy_wait_reason(coin, signal)
                 if accepted and optimizer_reason:
                     reason = f"{reason}; {optimizer_reason}"
                 if accepted and exploration:
@@ -216,6 +233,20 @@ class TradingEngine:
                 elif exploration:
                     reason = f"{reason}; {rl_assessment.reason}"
             if accepted:
+                entry_snapshot = await self.microstructure.capture(coin.symbol)
+                entry_gate = self.entry_gatekeeper.assess(coin, signal.signal, entry_snapshot)
+                if not entry_gate.allowed:
+                    accepted = False
+                    reason = entry_gate.reason
+                elif entry_gate.risk_multiplier < 1:
+                    trade_settings = replace(
+                        trade_settings,
+                        risk_percent=round(trade_settings.risk_percent * entry_gate.risk_multiplier, 4),
+                    )
+                    reason = f"{reason}; {entry_gate.reason}"
+                else:
+                    reason = f"{reason}; {entry_gate.reason}"
+            if accepted:
                 side = "LONG" if signal.signal == "BUY" else "SHORT"
                 direction_allowed, direction_reason, direction_multiplier = self.risk.directional_exposure(
                     side=side,
@@ -262,6 +293,7 @@ class TradingEngine:
                     decision_reason=reason,
                     paper_exploration=exploration,
                     committee=committee,
+                    microstructure=entry_snapshot,
                 )
                 if position:
                     open_count += 1
@@ -343,6 +375,7 @@ class TradingEngine:
             position.highest_price = max(position.highest_price or position.entry_price, coin.price)
             position.lowest_price = min(position.lowest_price or position.entry_price, coin.price)
             position.pnl = await self._position_total_pnl(db, position, coin.price)
+            await self._capture_position_microstructure(position)
 
         drawdown = await self._enforce_drawdown_limit(db, balance)
         emergency_close = drawdown.emergency
@@ -470,6 +503,14 @@ class TradingEngine:
         )
         return bullish_votes, bearish_votes
 
+    def _strategy_wait_reason(self, coin: MarketCoin, signal: StrategySignal) -> str:
+        bullish_votes, bearish_votes = self._paper_exploration_votes(coin)
+        missing = "; ".join(signal.reasons[:2]) if signal.reasons else "no directional confirmation"
+        return (
+            f"strategy WAIT score={signal.score}, rating={coin.rating}, "
+            f"bullish_votes={bullish_votes}, bearish_votes={bearish_votes}: {missing}"
+        )
+
     def _record_paper_learning_decisions(
         self,
         db: AsyncSession,
@@ -539,6 +580,7 @@ class TradingEngine:
         decision_reason: str = "",
         paper_exploration: bool = False,
         committee: AgentAnalysisOut | None = None,
+        microstructure: dict | None = None,
     ) -> Position | None:
         side = "LONG" if signal == "BUY" else "SHORT"
         stop, take, initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
@@ -569,6 +611,22 @@ class TradingEngine:
         entry_context["decision_reason"] = decision_reason
         entry_context["signal_score"] = int(signal_score)
         entry_context["entry_confidence"] = round(max(min(signal_score / 100, 1.0), 0.0), 4)
+        entry_context["microstructure"] = microstructure or {}
+        entry_context["position_microstructure"] = [
+            {
+                **(microstructure or {}),
+                "phase": "ENTRY",
+                "price": round(float(entry_price), 8),
+                "pnl": round(float(-entry_order.fee), 4),
+            }
+        ] if microstructure else []
+        entry_context["entry_execution"] = {
+            "order_id": entry_order.id,
+            "fee": round(float(entry_order.fee or 0.0), 8),
+            "slippage": round(float(entry_order.slippage or 0.0), 8),
+            "volume": round(float(volume), 8),
+            "average_price": round(float(entry_price), 8),
+        }
         if paper_exploration:
             bullish_votes, bearish_votes = self._paper_exploration_votes(coin)
             entry_context.update(
@@ -647,6 +705,35 @@ class TradingEngine:
             int(coin.regime_score),
             int(coin.rating),
         )
+
+    async def _capture_position_microstructure(self, position: Position) -> None:
+        if not self.settings.post_mortem_enabled:
+            return
+        context = dict(position.entry_context or {})
+        snapshots = list(context.get("position_microstructure") or [])
+        interval = timedelta(minutes=max(int(self.settings.post_mortem_snapshot_interval_minutes), 1))
+        if snapshots:
+            observed_at = snapshots[-1].get("observed_at") if isinstance(snapshots[-1], dict) else None
+            try:
+                last_observed = datetime.fromisoformat(str(observed_at))
+                if last_observed.tzinfo is None:
+                    last_observed = last_observed.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - last_observed < interval:
+                    return
+            except (TypeError, ValueError):
+                pass
+        snapshot = await self.microstructure.capture(position.symbol)
+        snapshot.update(
+            {
+                "phase": "POSITION",
+                "price": round(float(position.current_price), 8),
+                "pnl": round(float(position.pnl or 0.0), 4),
+            }
+        )
+        snapshots.append(snapshot)
+        max_snapshots = max(int(self.settings.post_mortem_max_position_snapshots), 3)
+        context["position_microstructure"] = snapshots[-max_snapshots:]
+        position.entry_context = context
 
     def _same_side_position_limit(self, paper_exploration: bool) -> int:
         configured = max(int(self.settings.max_same_side_positions), 1)
@@ -859,6 +946,26 @@ class TradingEngine:
                 )
             )
         position.pnl = self._total_closed_profit(previous_realized, final_trade_profit)
+        try:
+            post_mortem = await self.post_mortem.analyze_loss(db, position, exit_order, reason)
+            if post_mortem:
+                db.add(
+                    LogEntry(
+                        level="WARNING",
+                        message=(
+                            f"Post-mortem {position.symbol} #{position.id}: "
+                            f"label={post_mortem.primary_label}, reward={post_mortem.shaped_reward:+.2f}, "
+                            f"priority={post_mortem.priority:.2f}"
+                        ),
+                    )
+                )
+        except Exception as exc:
+            db.add(
+                LogEntry(
+                    level="ERROR",
+                    message=f"Post-mortem failed for {position.symbol} #{position.id}: {type(exc).__name__}",
+                )
+            )
         await self.learning.record_closed_position(db, position, position.pnl, reason)
         try:
             await self.context.remember_trade(

@@ -78,6 +78,7 @@ WORKER_HEARTBEAT_INTERVAL_SECONDS=30
 WORKER_HEARTBEAT_STALE_SECONDS=180
 WORKER_HEARTBEAT_STARTUP_GRACE_SECONDS=600
 WORKER_HEARTBEAT_LONG_TASK_GRACE_SECONDS=900
+WORKER_HEARTBEAT_EXPECTED_WORKERS=trader-worker,candle-worker,rl-worker,optimizer-worker,telegram
 TRADER_LOOP_SECONDS=60
 LLM_PROVIDER=none
 OPENAI_API_KEY=
@@ -86,8 +87,9 @@ AI_COMMITTEE_ENABLED=true
 AI_COMMITTEE_MIN_CONSENSUS=0.66
 MAX_GROSS_EXPOSURE_PERCENT=300
 MAX_SYMBOL_EXPOSURE_PERCENT=100
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
-MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+TRADING_EXCLUDED_SYMBOLS=BTC/USDT
+CANDLE_INGEST_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
+MARKET_SCAN_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
 MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h
 CANDLE_INGEST_LIMIT=500
@@ -136,17 +138,17 @@ TELEGRAM_TRADE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORT_INTERVAL_MINUTES=15
 PAPER_EXPLORATION_ENABLED=true
-PAPER_EXPLORATION_MIN_SCORE=65
+PAPER_EXPLORATION_MIN_SCORE=60
 PAPER_EXPLORATION_RISK_PERCENT=0.15
 PAPER_EXPLORATION_MAX_RISK_PERCENT=0.15
 PAPER_EXPLORATION_MAX_POSITIONS=2
 PAPER_EXPLORATION_RECOVERY_SLOTS=2
-PAPER_EXPLORATION_MAX_PER_CYCLE=1
-PAPER_EXPLORATION_MIN_DIRECTIONAL_VOTES=5
+PAPER_EXPLORATION_MAX_PER_CYCLE=2
+PAPER_EXPLORATION_MIN_DIRECTIONAL_VOTES=4
 PAPER_EXPLORATION_MIN_VOTE_MARGIN=2
-PAPER_EXPLORATION_COOLDOWN_MINUTES=240
+PAPER_EXPLORATION_COOLDOWN_MINUTES=180
 SAFETY_CHECK_ENABLED=true
-SAFETY_CHECK_SYMBOL=BTC/USDT
+SAFETY_CHECK_SYMBOL=ETH/USDT
 SAFETY_RETRY_ATTEMPTS=5
 SAFETY_RETRY_INITIAL_SECONDS=2
 SAFETY_RETRY_MAX_SECONDS=30
@@ -167,8 +169,9 @@ JWT_SECRET=the-same-secret-as-backend
 ENCRYPTION_KEY=the-same-fernet-key-as-backend
 PAPER_TRADING=true
 MARKET_DATA_MODE=ccxt
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
-MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+TRADING_EXCLUDED_SYMBOLS=BTC/USDT
+CANDLE_INGEST_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
+MARKET_SCAN_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
 MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h,15m
 CANDLE_INGEST_LIMIT=500
@@ -194,7 +197,7 @@ STRATEGY_OPTIMIZER_TOP_N=5
 
 `PAPER_TRADING=true` controls order execution only. Paper orders and balances remain virtual while `MARKET_DATA_MODE=ccxt` reads real public exchange prices and candles. The legacy value `MARKET_DATA_MODE=paper` is treated as the same real public feed for backward compatibility. Synthetic data is available only with the explicit value `MARKET_DATA_MODE=synthetic` and must never be used by the RL trainer.
 
-`PAPER_EXPLORATION_ENABLED=true` enables a separate paper-only learning lane when the strict strategy returns `WAIT`. A candidate must clear the score threshold, a decisive indicator vote, market-quality, walk-forward, RL, cooldown, exposure, daily-loss, and drawdown gates. The lane can keep learning while the regular performance guard is cooling down, but it has independent recovery slots, opens at most one new position per cycle, and is hard-capped by `PAPER_EXPLORATION_MAX_RISK_PERCENT` even when an older deployment variable requests more risk. Every candidate and final allow/block result is recorded as `PaperLearningScout` and `PaperLearningRiskGate` agent activity. Exploratory outcomes update learning memory but do not distort the regular-strategy performance guard.
+`PAPER_EXPLORATION_ENABLED=true` enables a separate paper-only learning lane when the strict strategy returns `WAIT`. A candidate must clear the score threshold, a decisive indicator vote, market-quality, walk-forward, RL, cooldown, exposure, daily-loss, and drawdown gates. The lane can keep learning while the regular performance guard is cooling down, but it has independent recovery slots, obeys the configured `PAPER_EXPLORATION_MAX_PER_CYCLE` cap, and is hard-capped by `PAPER_EXPLORATION_MAX_RISK_PERCENT` even when an older deployment variable requests more risk. Every candidate and final allow/block result is recorded as `PaperLearningScout` and `PaperLearningRiskGate` agent activity. Exploratory outcomes update learning memory but do not distort the regular-strategy performance guard.
 
 For exchange testnet execution, set `PAPER_TRADING=false`, `LIVE_TRADING_ENABLED=true`, and keep `EXCHANGE_SANDBOX_ENABLED=true`. Keep `ALLOW_LIVE_TRADING_WITHOUT_SANDBOX=false` until live execution is reviewed, tested, and deliberately approved.
 
@@ -205,7 +208,7 @@ SAFETY_REQUIRE_API_CREDENTIALS=true
 SAFETY_VALIDATE_PRIVATE_API=true
 ```
 
-Do not add exchange secrets to the frontend or RL worker. In paper mode the pre-flight reads real public Binance time and `BTC/USDT` ticker data, but orders and balances remain virtual. In live mode it logs a prominent warning, requires both credentials, and validates them with `fetch_balance`. Invalid environment values, malformed exchange data, authentication failures, or exhausted network retries terminate the worker with exit code `1`, so Railway cannot start trading in a partially configured state. `SIGTERM` and `SIGINT` stop future loop iterations, interrupt PPO training through a Stable Baselines3 callback, and close tracked CCXT clients.
+Do not add exchange secrets to the frontend or RL worker. In paper mode the pre-flight reads real public Binance time and `ETH/USDT` ticker data, but orders and balances remain virtual. `TRADING_EXCLUDED_SYMBOLS=BTC/USDT` removes Bitcoin from scans, candle ingestion, RL, shadow decisions, and all new entries while existing positions remain managed until their normal exit. In live mode pre-flight logs a prominent warning, requires both credentials, and validates them with `fetch_balance`. Invalid environment values, malformed exchange data, authentication failures, or exhausted network retries terminate the worker with exit code `1`, so Railway cannot start trading in a partially configured state. `SIGTERM` and `SIGINT` stop future loop iterations, interrupt PPO training through a Stable Baselines3 callback, and close tracked CCXT clients.
 
 RL worker variables:
 
@@ -220,12 +223,15 @@ PAPER_TRADING=true
 LIVE_TRADING_ENABLED=false
 MARKET_DATA_MODE=ccxt
 DEFAULT_EXCHANGE=binance
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
-MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+TRADING_EXCLUDED_SYMBOLS=BTC/USDT
+CANDLE_INGEST_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
+MARKET_SCAN_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
 MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h
 RL_TRAINER_ENABLED=true
 RL_GATE_ENABLED=true
+RL_SYMBOLS=ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,FET/USDT,ONDO/USDT
+RL_TRAINING_MAX_PER_CYCLE=1
 RL_TRAINING_TIMESTEPS=20000
 RL_TRAINING_LIMIT=5000
 RL_MIN_TRAINING_CANDLES=2000
@@ -234,23 +240,44 @@ RL_REFRESH_HOURS=24
 RL_REJECTED_RETRY_HOURS=6
 RL_PREDICTION_LOOP_SECONDS=300
 SAFETY_CHECK_ENABLED=true
-SAFETY_CHECK_SYMBOL=BTC/USDT
+SAFETY_CHECK_SYMBOL=ETH/USDT
 SAFETY_RETRY_ATTEMPTS=5
 SAFETY_RETRY_INITIAL_SECONDS=2
 SAFETY_RETRY_MAX_SECONDS=30
 RL_VALIDATION_PERCENT=25
 RL_MIN_VALIDATION_RETURN_PERCENT=0
+RL_MIN_EXCESS_RETURN_PERCENT=0
+RL_MIN_PROFITABLE_SEED_RATIO=0.5
 RL_MIN_VALIDATION_PROFIT_FACTOR=1.05
 RL_MIN_VALIDATION_TRADES=5
 RL_MAX_VALIDATION_DRAWDOWN_PERCENT=15
 RL_GATE_MIN_CONFIDENCE=0.55
 RL_GATE_MAX_AGE_HOURS=6
 RL_WAIT_RISK_MULTIPLIER=0.5
+RL_CURRICULUM_ENABLED=true
+RL_BEHAVIOR_PENALTY=0.35
+RL_STRATEGY_ADHERENCE_BONUS=0.03
+SHADOW_TRADE_NOTIONAL=100
+SHADOW_TRADE_MIN_CONFIDENCE=0.55
+SHADOW_FORWARD_MIN_TRADES=5
+SHADOW_FORWARD_MIN_PROFIT_FACTOR=1.1
+SHADOW_FORWARD_MIN_WIN_RATE=40
+SHADOW_FORWARD_MIN_PNL=0
+SHADOW_FORWARD_MAX_DRAWDOWN_PERCENT=8
+SHADOW_FORWARD_MAX_TRIAL_DAYS=7
 ```
 
 The RL service needs no Binance API key because OHLCV is public. Set its Railway Config File to `/backend/railway.rl.toml`; this selects `Dockerfile.rl`. Deploy it in the same Railway region that can reach Binance. Stable Baselines3 and CPU-only PyTorch are installed only by `Dockerfile.rl`; the web, trader, and Telegram images remain smaller.
 
-PPO training runs outside the asyncio event loop, so `rl-worker` keeps publishing heartbeat updates while PyTorch is busy. Worker status reports expose the current pair, progress, and cycle totals; rejected candidates wait `RL_REJECTED_RETRY_HOURS` before training again instead of repeating on nearly identical candles every prediction cycle.
+PPO training runs outside the asyncio event loop, so `rl-worker` keeps publishing heartbeat updates while PyTorch is busy. `RL_SYMBOLS` defines the RL universe independently from the market scanner, while `RL_TRAINING_MAX_PER_CYCLE` limits heavy training attempts and lets missing pairs enter the queue gradually. Worker status reports expose the current pair, progress, active and shadow decisions, and deferred training totals.
+
+Every new model starts as `SHADOW`, even after it passes chronological validation. Backtest promotion eligibility still requires benchmark edge, seed stability, return, profit factor, trade count, and drawdown gates, but actual `ACTIVE` promotion now additionally requires virtual forward trades to pass PnL, win-rate, profit-factor, and drawdown thresholds. Shadow trades include simulated fees, slippage, and market impact and never create exchange orders. Only a promoted `rl_policy` decision can block or confirm a real/paper strategy entry. The dashboard reports active pair coverage separately from experiment history and shows shadow forward PnL, trades, and promotion state.
+
+RL training uses curriculum stages when clean contiguous trend and normal-volatility windows are available, then finishes on the complete market history. The reward function separates financial outcome from behavior: it penalizes churn, giving back an established unrealized edge, and holding through repeated adverse confirmation; it gives a small credit for strategy-aligned actions and disciplined invalidation exits. Loss post-mortems are replay-weighted in later training, capped by `BAD_REPLAY_MAX_WEIGHT` so one mistake cannot dominate the whole dataset.
+
+Entry execution uses a two-level gatekeeper. The macro gate enforces market regime and direction; the micro gate reads public order-book depth, recent trades, spread, 10-minute momentum, and a clearly labelled iceberg proxy. Strong opposing book+tape flow blocks the entry, neutral or unavailable micro data reduces risk, and supportive consensus keeps normal risk. Configure it with `ENTRY_MICROSTRUCTURE_*`; `AI_COMMITTEE_MIN_CONSENSUS` defaults to `0.75`.
+
+After every closed losing position, `trade_post_mortems` stores the 30-minute pre-entry/position path, entry and exit microstructure, MFE/MAE, fees/slippage, behavior labels, shaped reward, lesson, and replay priority. Correct stop discipline receives credit even when financial PnL is negative. The dashboard and Telegram close report explain the result; `/api/v1/strategy-lab/post-mortems` and `/api/v1/strategy-lab/shadow-trades` expose the auditable records.
 
 Only the `backend` and `frontend` services need public domains. Worker services should remain private. The web process runs Alembic migrations by default; background workers skip migrations to avoid concurrent schema upgrades. Override this only with an explicit `RUN_MIGRATIONS=true`.
 
@@ -326,6 +353,7 @@ Supported commands:
 - Applies risk checks before opening paper positions.
 - Blocks entries when portfolio or single-symbol exposure exceeds configured limits.
 - Uses the AI Trade Committee as an optional final entry gate before opening positions.
+- Requires a macro-regime plus microstructure gate using order-book imbalance, time-and-sales flow, spread, and short momentum before execution.
 - Opens positions with ATR-aware stop/take planning and moves stops to breakeven after configured R-multiple progress.
 - Produces a normalized `[-1, 1]` RSI/ATR/SMA market-context vector suitable for Stable Baselines3 observations.
 - Caps each new position by both loss budget and configured deposit percentage.
@@ -334,17 +362,19 @@ Supported commands:
 - Sends detailed Russian Telegram reports for worker startup, every configured cycle interval, paper/live entries, risk plan, current PnL, protection changes, partial profit, closing reason, final result, learning update, and worker/exchange errors.
 - Persists Telegram notifications in a deduplicated outbox, retries transient delivery failures with exponential backoff, and resumes partially delivered text/photo reports without duplicating the successful part.
 - Adds the latest 48 real Binance 1h candles, entry, current price, stop loss, and take profit to each position card when market data is available.
-- Records worker heartbeats and sends one alert when a worker becomes stale plus a recovery notice when it resumes; `/status` shows current worker and outbox health.
+- Records worker heartbeats and sends one alert when a worker becomes stale plus a recovery notice when it resumes; expected workers that never start are reported as `MISSING`, while retired worker rows are ignored through `WORKER_HEARTBEAT_EXPECTED_WORKERS`.
+- Uses renewable, owner-token Redis leases for every trading mutation. Automatic cycles, manual scans, ticks, and manual closes share one lock, so an expired old process cannot delete a newer worker's lease or submit a competing order.
 - Provides Telegram `/health` diagnostics for PostgreSQL, Redis, Binance market data, the notification queue, and every worker heartbeat.
 - Sends one deduplicated daily Telegram portfolio report with a generated JPEG card (18:00 UTC by default), including PnL, positions, learning, workers, and delivery-queue health.
 - Returns an execution report for every manual scan: scanned, opened, skipped, and decision reasons.
 - Manages open positions through `/api/v1/trading/tick`: current price, floating PnL, stop loss, take profit, trailing stop, and close reasons.
 - Stores every execution attempt in `orders`, including status, filled amount, average price, fee, and paper slippage.
 - Reconciles local order state through `POST /api/v1/orders/reconcile` and Telegram `/reconcile`.
-- Runs strategy backtests through `/api/v1/trading/backtest` using stored candles.
+- Runs strategy backtests through `/api/v1/trading/backtest` using stored candles with volatility-, liquidity-, latency-, fee-, slippage-, and market-impact costs.
 - Runs walk-forward backtests through `/api/v1/trading/backtest/walk-forward` to validate optimized parameters on unseen windows.
 - Runs Strategy Lab optimization through `/api/v1/strategy-lab/optimize` and stores top strategy configurations.
-- Trains multiple seeded PPO candidates on older real candles, validates them chronologically on unseen candles with fees and slippage, and promotes only candidates that pass return, profit-factor, trade-count, and drawdown gates.
+- Trains multiple seeded PPO candidates with curriculum learning and Bad Experience Replay, validates them chronologically with realistic costs, then requires a profitable virtual forward test before activation.
+- Creates structured post-mortems for every loss and distinguishes avoidable behavior from a correctly executed stop.
 - Publishes promoted PPO decisions through the shared database; the trading engine uses them only as a veto or risk reducer behind deterministic risk controls.
 - Provides safe AI Trade Committee decisions through `/api/v1/agents/analyze`; agents vote, veto weak setups, and audit every decision while deterministic risk checks remain the gate.
 - Supports an optional OpenAI-backed LLM advisor behind `LLM_PROVIDER=openai`; disagreements force WAIT rather than increasing risk.

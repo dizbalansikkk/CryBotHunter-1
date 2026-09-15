@@ -19,9 +19,17 @@ class MarketQualityGate:
         hard_reasons: list[str] = []
         soft_reasons: list[str] = []
 
-        if coin.volume_24h < self.settings.market_quality_min_quote_volume:
+        hard_volume_floor = min(
+            self.settings.market_quality_hard_min_quote_volume,
+            self.settings.market_quality_min_quote_volume,
+        )
+        if coin.volume_24h < hard_volume_floor:
             hard_reasons.append(
-                f"quote volume {coin.volume_24h:.0f} < {self.settings.market_quality_min_quote_volume:.0f}"
+                f"quote volume {coin.volume_24h:.0f} < {hard_volume_floor:.0f} hard limit"
+            )
+        elif coin.volume_24h < self.settings.market_quality_min_quote_volume:
+            soft_reasons.append(
+                f"quote volume {coin.volume_24h:.0f} < {self.settings.market_quality_min_quote_volume:.0f} target"
             )
 
         if coin.spread_bps > self.settings.market_quality_max_spread_bps * 2:
@@ -59,5 +67,6 @@ class MarketQualityGate:
         if coin.spread_bps > 0:
             spread_ratio = self.settings.market_quality_max_spread_bps / coin.spread_bps
         change_ratio = self.settings.market_quality_max_price_change_percent / max(abs(coin.price_change_percent), 0.01)
-        multiplier = min(spread_ratio, change_ratio, 1.0)
+        volume_ratio = coin.volume_24h / max(self.settings.market_quality_min_quote_volume, 1.0)
+        multiplier = min(spread_ratio, change_ratio, volume_ratio, 1.0)
         return round(max(self.settings.market_quality_min_risk_multiplier, multiplier), 2)

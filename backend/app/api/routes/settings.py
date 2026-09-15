@@ -56,8 +56,9 @@ async def test_exchange_connection(user: User = Depends(current_user), db: Async
     settings = await _settings_for(user, db)
     runtime = get_settings()
     diagnostics = await _exchange_network_diagnostics()
+    exchange = ExchangeClient.from_user_settings(settings)
     try:
-        balance = await ExchangeClient.from_user_settings(settings).fetch_real_balance()
+        balance = await exchange.fetch_real_balance()
     except Exception as exc:
         return ActionMessage(
             ok=False,
@@ -71,6 +72,8 @@ async def test_exchange_connection(user: User = Depends(current_user), db: Async
                 + f" {diagnostics}"
             ),
         )
+    finally:
+        await exchange.close()
 
     usdt = float(balance.get("USDT") or 0.0)
     mode = "sandbox" if runtime.exchange_sandbox_enabled else "real"

@@ -478,6 +478,82 @@ button {
   color: var(--mint);
 }
 
+.rl-control-center {
+  @apply space-y-4 rounded-md border p-4;
+  border-color: rgba(84, 232, 255, 0.3);
+  background:
+    radial-gradient(circle at 92% 8%, rgba(255, 209, 102, 0.16), transparent 28%),
+    linear-gradient(145deg, rgba(54, 242, 162, 0.1), rgba(4, 25, 63, 0.82) 46%, rgba(84, 232, 255, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.rl-control-header {
+  @apply flex items-center justify-between gap-5;
+}
+
+.rl-control-header h3 {
+  @apply mt-1 text-xl font-black;
+  color: var(--text);
+}
+
+.rl-control-header p {
+  @apply mt-2 max-w-3xl text-sm;
+}
+
+.rl-control-kicker {
+  @apply text-xs font-black tracking-widest;
+  color: var(--cyan);
+}
+
+.rl-coverage-orb {
+  @apply flex h-24 w-24 shrink-0 flex-col items-center justify-center rounded-full border;
+  border-color: rgba(255, 209, 102, 0.4);
+  background: radial-gradient(circle, rgba(255, 209, 102, 0.18), rgba(4, 25, 63, 0.9) 68%);
+  box-shadow: 0 0 34px rgba(255, 209, 102, 0.12);
+}
+
+.rl-coverage-orb.ready {
+  border-color: rgba(54, 242, 162, 0.46);
+  background: radial-gradient(circle, rgba(54, 242, 162, 0.2), rgba(4, 25, 63, 0.9) 68%);
+  box-shadow: 0 0 34px rgba(54, 242, 162, 0.16);
+}
+
+.rl-coverage-orb strong {
+  @apply text-2xl font-black;
+  color: var(--coin);
+}
+
+.rl-coverage-orb.ready strong {
+  color: var(--mint);
+}
+
+.rl-coverage-orb span {
+  @apply text-xs uppercase;
+  color: var(--muted);
+}
+
+.rl-fleet-grid {
+  @apply lg:grid-cols-4;
+}
+
+.rl-fleet-grid .metric strong {
+  @apply text-2xl;
+}
+
+.rl-pair-coverage {
+  @apply flex items-center justify-between gap-4 rounded-md border px-4 py-3;
+  border-color: rgba(84, 232, 255, 0.2);
+  background: rgba(3, 18, 48, 0.62);
+}
+
+.rl-pair-coverage > div:first-child {
+  @apply flex flex-col gap-1 text-sm;
+}
+
+.rl-pair-chips {
+  @apply flex max-w-xl flex-wrap justify-end gap-2;
+}
+
 .learning-progress-track {
   @apply mt-3 h-2 overflow-hidden rounded-full;
   background: rgba(139, 167, 187, 0.18);
@@ -642,11 +718,43 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.experience-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.experience-card {
+  position: relative;
+  overflow: auto;
+  border-color: rgba(84, 232, 255, 0.22);
+  background:
+    linear-gradient(145deg, rgba(12, 27, 61, 0.94), rgba(4, 13, 35, 0.96)),
+    radial-gradient(circle at 100% 0, rgba(84, 232, 255, 0.12), transparent 42%);
+}
+
+.experience-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cyan), var(--coin), transparent 86%);
+  opacity: 0.7;
+}
+
+.experience-card table {
+  min-width: 760px;
+}
+
 .space-y-5 > :not([hidden]) ~ :not([hidden]) {
   margin-top: 1.25rem;
 }
 
 @media (max-width: 760px) {
+  .experience-grid {
+    grid-template-columns: 1fr;
+  }
   body::after,
   .app-shell::before,
   .app-shell::after {
@@ -655,6 +763,20 @@ tbody tr:hover {
 
   .auth-panel {
     @apply p-5;
+  }
+
+  .rl-control-header,
+  .rl-pair-coverage {
+    @apply items-start;
+    flex-direction: column;
+  }
+
+  .rl-coverage-orb {
+    @apply h-20 w-20;
+  }
+
+  .rl-pair-chips {
+    @apply justify-start;
   }
 
   .auth-panel h1,

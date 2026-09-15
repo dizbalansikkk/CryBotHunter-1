@@ -12,7 +12,7 @@ from app.schemas.dto import ActionMessage, BacktestOut, PerformanceGuardOut, Sys
 from app.services.backtesting import BacktestingService
 from app.services.control import TradingControlService
 from app.services.history import HistoricalDataService
-from app.services.locks import RedisLockManager
+from app.services.locks import RedisLockManager, TRADING_CYCLE_LOCK
 from app.services.performance_guard import PerformanceGuardService
 from app.services.pnl import PnlMetricsService
 from app.services.risk_manager import RiskManager, RiskSettings
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 @router.post("/run-once", response_model=TradingRunOut)
 async def run_once(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> TradingRunOut:
     runtime_settings = get_settings()
-    paused, _reason = await TradingControlService().is_paused()
+    paused, _reason = await _trading_control_status()
     if paused:
         return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
@@ -46,38 +46,56 @@ async def run_once(user: User = Depends(current_user), db: AsyncSession = Depend
         partial_take_profit_r=user_settings.partial_take_profit_r,
         partial_close_percent=user_settings.partial_close_percent,
     )
-    async with RedisLockManager().lock("trading-run", ttl_seconds=55) as acquired:
-        if not acquired:
-            return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
-        exchange = ExchangeClient.from_user_settings(user_settings)
-        try:
-            return await TradingEngine(exchange).run_once(db, risk_settings, timeframe=user_settings.scan_interval)
-        except Exception as exc:
-            logger.exception("Trading scan failed")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=exchange_error_message(
-                    exc,
-                    exchange=user_settings.exchange,
-                    market_type=runtime_settings.exchange_default_type,
-                    sandbox=runtime_settings.exchange_sandbox_enabled,
-                ),
-            ) from exc
+    locks = RedisLockManager()
+    try:
+        async with locks.lock(TRADING_CYCLE_LOCK, ttl_seconds=55) as acquired:
+            if not acquired:
+                return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
+            exchange = ExchangeClient.from_user_settings(user_settings)
+            engine = TradingEngine(exchange)
+            try:
+                return await engine.run_once(db, risk_settings, timeframe=user_settings.scan_interval)
+            except Exception as exc:
+                logger.exception("Trading scan failed")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=exchange_error_message(
+                        exc,
+                        exchange=user_settings.exchange,
+                        market_type=runtime_settings.exchange_default_type,
+                        sandbox=runtime_settings.exchange_sandbox_enabled,
+                    ),
+                ) from exc
+            finally:
+                await engine.close()
+                await exchange.close()
+    finally:
+        await locks.close()
 
 
 @router.post("/tick", response_model=TradingTickOut)
 async def tick(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> TradingTickOut:
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
-    async with RedisLockManager().lock("trading-tick", ttl_seconds=55) as acquired:
-        if not acquired:
-            return TradingTickOut(checked=0, closed=0, updated=[])
-        return await TradingEngine(ExchangeClient.from_user_settings(user_settings)).manage_open_positions(db)
+    locks = RedisLockManager()
+    try:
+        async with locks.lock(TRADING_CYCLE_LOCK, ttl_seconds=55) as acquired:
+            if not acquired:
+                return TradingTickOut(checked=0, closed=0, updated=[])
+            exchange = ExchangeClient.from_user_settings(user_settings)
+            engine = TradingEngine(exchange)
+            try:
+                return await engine.manage_open_positions(db)
+            finally:
+                await engine.close()
+                await exchange.close()
+    finally:
+        await locks.close()
 
 
 @router.get("/status", response_model=SystemStatusOut)
 async def status(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> SystemStatusOut:
     settings = get_settings()
-    paused, panic_reason = await TradingControlService().is_paused()
+    paused, panic_reason = await _trading_control_status()
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
     open_positions = (
         await db.execute(select(func.count()).select_from(Position).where(Position.status == "OPEN"))
@@ -93,8 +111,9 @@ async def status(user: User = Depends(current_user), db: AsyncSession = Depends(
     exchange_error = None
     balance = 0.0
     if gross_exposure > 0:
+        exchange = ExchangeClient.from_user_settings(user_settings)
         try:
-            balance = (await ExchangeClient.from_user_settings(user_settings).get_balance()).get("USDT", 0.0)
+            balance = (await exchange.get_balance()).get("USDT", 0.0)
         except Exception as exc:
             logger.exception("Failed to fetch trading status exchange balance")
             exchange_connected = False
@@ -104,6 +123,8 @@ async def status(user: User = Depends(current_user), db: AsyncSession = Depends(
                 market_type=settings.exchange_default_type,
                 sandbox=settings.exchange_sandbox_enabled,
             )
+        finally:
+            await exchange.close()
     return SystemStatusOut(
         paper_trading=settings.paper_trading,
         market_data_mode=settings.market_data_mode,
@@ -130,7 +151,11 @@ async def status(user: User = Depends(current_user), db: AsyncSession = Depends(
 
 @router.post("/panic", response_model=ActionMessage)
 async def panic(_: User = Depends(current_user), reason: str = "manual") -> ActionMessage:
-    applied = await TradingControlService().panic(reason)
+    control = TradingControlService()
+    try:
+        applied = await control.panic(reason)
+    finally:
+        await control.close()
     if not applied:
         return ActionMessage(ok=False, message="Redis unavailable; panic state could not be persisted. Trading remains fail-closed.")
     return ActionMessage(ok=True, message=f"Trading entry scans paused: {reason}")
@@ -138,7 +163,11 @@ async def panic(_: User = Depends(current_user), reason: str = "manual") -> Acti
 
 @router.post("/resume", response_model=ActionMessage)
 async def resume(_: User = Depends(current_user)) -> ActionMessage:
-    applied = await TradingControlService().resume()
+    control = TradingControlService()
+    try:
+        applied = await control.resume()
+    finally:
+        await control.close()
     if not applied:
         return ActionMessage(ok=False, message="Redis unavailable; trading remains fail-closed.")
     return ActionMessage(ok=True, message="Trading entry scans resumed")
@@ -158,7 +187,7 @@ async def sample_backtest(_: User = Depends(current_user)) -> BacktestOut:
 
 @router.post("/backtest", response_model=BacktestOut)
 async def run_backtest(
-    symbol: str = "BTC/USDT",
+    symbol: str = "ETH/USDT",
     timeframe: str = "1h",
     limit: int = 500,
     user: User = Depends(current_user),
@@ -166,17 +195,20 @@ async def run_backtest(
 ) -> BacktestOut:
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
     history = HistoricalDataService(ExchangeClient.from_user_settings(user_settings))
-    candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=min(limit, 1000))
-    if len(candles) < 220:
-        await history.ingest(db, symbol=symbol, timeframe=timeframe, limit=min(limit, 1000))
+    try:
         candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=min(limit, 1000))
-    report = BacktestingService().run(candles)
-    return BacktestOut(**report.__dict__)
+        if len(candles) < 220:
+            await history.ingest(db, symbol=symbol, timeframe=timeframe, limit=min(limit, 1000))
+            candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=min(limit, 1000))
+        report = BacktestingService().run(candles)
+        return BacktestOut(**report.__dict__)
+    finally:
+        await history.exchange.close()
 
 
 @router.post("/backtest/walk-forward", response_model=WalkForwardOut)
 async def run_walk_forward_backtest(
-    symbol: str = "BTC/USDT",
+    symbol: str = "ETH/USDT",
     timeframe: str = "1h",
     limit: int = 1000,
     train_size: int = 300,
@@ -191,9 +223,25 @@ async def run_walk_forward_backtest(
     test_size = max(80, min(test_size, 500))
     step_size = max(40, min(step_size, test_size))
     history = HistoricalDataService(ExchangeClient.from_user_settings(user_settings))
-    candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=bounded_limit)
-    if len(candles) < train_size + test_size:
-        await history.ingest(db, symbol=symbol, timeframe=timeframe, limit=bounded_limit)
+    try:
         candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=bounded_limit)
-    report = BacktestingService().walk_forward(candles, train_size=train_size, test_size=test_size, step_size=step_size)
-    return WalkForwardOut(**report.__dict__)
+        if len(candles) < train_size + test_size:
+            await history.ingest(db, symbol=symbol, timeframe=timeframe, limit=bounded_limit)
+            candles = await history.load(db, symbol=symbol, timeframe=timeframe, limit=bounded_limit)
+        report = BacktestingService().walk_forward(
+            candles,
+            train_size=train_size,
+            test_size=test_size,
+            step_size=step_size,
+        )
+        return WalkForwardOut(**report.__dict__)
+    finally:
+        await history.exchange.close()
+
+
+async def _trading_control_status() -> tuple[bool, str | None]:
+    control = TradingControlService()
+    try:
+        return await control.is_paused()
+    finally:
+        await control.close()

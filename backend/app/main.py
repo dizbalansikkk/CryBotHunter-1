@@ -60,14 +60,20 @@ async def deep_health() -> dict[str, object]:
     except Exception as exc:
         checks["status"] = "degraded"
         checks["database"] = f"error: {exc.__class__.__name__}"
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        redis = Redis.from_url(settings.redis_url, decode_responses=True)
         await redis.ping()
         checks["redis"] = "ok"
     except Exception as exc:
         checks["status"] = "degraded"
         checks["redis"] = f"error: {exc.__class__.__name__}"
-    paused, reason = await TradingControlService().is_paused()
+    finally:
+        await redis.aclose()
+    control = TradingControlService()
+    try:
+        paused, reason = await control.is_paused()
+    finally:
+        await control.close()
     checks["panic_paused"] = paused
     checks["panic_reason"] = reason
     checks["paper_trading"] = settings.paper_trading

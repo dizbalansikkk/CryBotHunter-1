@@ -300,7 +300,7 @@ export type RlModel = {
   symbol: string;
   timeframe: string;
   algorithm: string;
-  status: "ACTIVE" | "REJECTED" | "RETIRED" | string;
+  status: "ACTIVE" | "SHADOW" | "REJECTED" | "RETIRED" | "CANDIDATE" | string;
   is_active: boolean;
   training_candles: number;
   validation_candles: number;
@@ -311,11 +311,71 @@ export type RlModel = {
     trades?: number;
     buy_hold_return_percent?: number;
     passed?: boolean;
+    backtest_passed?: boolean;
+    forward_status?: "PENDING" | "PASSED" | "FAILED" | "NOT_ELIGIBLE";
+    forward?: {
+      closed_trades?: number;
+      wins?: number;
+      losses?: number;
+      win_rate?: number;
+      profit_factor?: number;
+      total_pnl?: number;
+      max_drawdown_percent?: number;
+      reason?: string;
+    };
+    bad_experiences_seen?: number;
+    replay_weighted_candles?: number;
+    curriculum_stages?: Array<{ stage: string; candles: number; timesteps: number }>;
     promotion_reason?: string;
     market_data_source?: string;
     seed?: number;
   };
   feature_schema: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+export type ShadowTrade = {
+  id: number;
+  model_id: number;
+  symbol: string;
+  timeframe: string;
+  side: string;
+  status: string;
+  entry_price: number;
+  current_price: number;
+  volume: number;
+  stop: number;
+  take: number;
+  fee: number;
+  slippage: number;
+  pnl: number;
+  confidence: number;
+  entry_context: Record<string, unknown>;
+  exit_reason?: string | null;
+  entered_at: string;
+  closed_at?: string | null;
+};
+
+export type TradePostMortem = {
+  id: number;
+  position_id: number;
+  symbol: string;
+  side: string;
+  pnl: number;
+  planned_risk: number;
+  result_r: number;
+  shaped_reward: number;
+  priority: number;
+  primary_label: string;
+  behavior_labels: string[];
+  strategy_followed: boolean;
+  market_snapshot: Record<string, unknown>;
+  execution_snapshot: Record<string, unknown>;
+  reward_components: Record<string, number>;
+  lessons: string[];
+  entered_at: string;
+  closed_at: string;
+  replay_count: number;
   created_at?: string | null;
 };
 
@@ -386,6 +446,28 @@ export type TradeBlocker = {
   count: number;
 };
 
+export type RlFleet = {
+  target_pairs: number;
+  target_models: number;
+  active_pairs: number;
+  active_models: number;
+  shadow_models: number;
+  rejected_models: number;
+  retired_models: number;
+  candidate_models: number;
+  total_experiments: number;
+  promoted_experiments: number;
+  promotion_rate_percent: number;
+  active_decisions_24h: number;
+  shadow_decisions_24h: number;
+  shadow_open_trades: number;
+  shadow_closed_trades: number;
+  shadow_win_rate: number;
+  shadow_pnl: number;
+  uncovered_pairs: string[];
+  last_training_at?: string | null;
+};
+
 export type LearningProgress = {
   stage: "COLLECTING" | "CALIBRATING" | "LEARNING" | "MATURE";
   overall_progress_percent: number;
@@ -400,11 +482,18 @@ export type LearningProgress = {
   signals_24h: number;
   directional_signals_24h: number;
   waits_24h: number;
+  strong_waits_24h: number;
+  trading_symbols: string[];
+  excluded_symbols: string[];
   agent_decisions_24h: number;
   learning_rules: number;
   learning_observations: number;
+  bad_experiences: number;
+  avoidable_failures: number;
+  disciplined_stop_losses: number;
   active_rl_pairs: number;
   trained_rl_models: number;
+  rl_fleet: RlFleet;
   optimized_pairs: number;
   candle_pairs_ready: number;
   candle_pairs_total: number;
@@ -414,6 +503,7 @@ export type LearningProgress = {
   last_signal_at?: string | null;
   last_trade_closed_at?: string | null;
   last_learning_at?: string | null;
+  last_post_mortem_at?: string | null;
   last_agent_decision_at?: string | null;
   milestones: LearningMilestone[];
   top_blockers_24h: TradeBlocker[];

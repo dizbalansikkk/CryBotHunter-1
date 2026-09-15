@@ -39,6 +39,11 @@ def test_regime_detector_does_not_treat_missing_spot_open_interest_as_illiquid()
     assert regime.name == "TRENDING_UP"
 
 
+def test_regime_detector_uses_hard_floor_not_soft_liquidity_target():
+    assert MarketRegimeDetector().detect(row(volume_24h=20_000_000, open_interest=0)).name == "TRENDING_UP"
+    assert MarketRegimeDetector().detect(row(volume_24h=2_000_000, open_interest=0)).name == "LOW_LIQUIDITY"
+
+
 def test_regime_detector_blocks_high_volatility():
     regime = MarketRegimeDetector().detect(row(atr=12))
     assert regime.name == "HIGH_VOLATILITY"

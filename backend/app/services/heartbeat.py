@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
@@ -57,6 +58,7 @@ class WorkerHeartbeatService:
         if not self.settings.worker_heartbeat_enabled:
             return []
         now = datetime.now(timezone.utc)
+        expected_workers = expected_worker_names(self.settings)
         stale_seconds = max(int(self.settings.worker_heartbeat_stale_seconds), 60)
         startup_grace_seconds = max(
             int(getattr(self.settings, "worker_heartbeat_startup_grace_seconds", 600)),
@@ -68,13 +70,42 @@ class WorkerHeartbeatService:
         )
         events: list[HeartbeatEvent] = []
         async with AsyncSessionLocal() as db:
-            items = (
+            statement = select(WorkerHeartbeat)
+            if expected_workers:
+                statement = statement.where(WorkerHeartbeat.worker_name.in_(expected_workers))
+            locked_statement = (
+                statement
+                .order_by(WorkerHeartbeat.worker_name.asc())
+                .with_for_update(skip_locked=True)
+            )
+            items = list((await db.execute(locked_statement)).scalars().all())
+            existing_names = {item.worker_name for item in items}
+            missing_names = [
+                worker_name
+                for worker_name in expected_workers
+                if worker_name not in existing_names
+            ]
+            if missing_names:
                 await db.execute(
-                    select(WorkerHeartbeat)
-                    .order_by(WorkerHeartbeat.worker_name.asc())
-                    .with_for_update(skip_locked=True)
+                    insert(WorkerHeartbeat)
+                    .values(
+                        [
+                            {
+                                "worker_name": worker_name,
+                                "status": "MISSING",
+                                "detail": {
+                                    "stage": "awaiting_first_heartbeat",
+                                    "expected": True,
+                                },
+                                "last_seen_at": now,
+                                "stale_alerted": False,
+                            }
+                            for worker_name in missing_names
+                        ]
+                    )
+                    .on_conflict_do_nothing(index_elements=["worker_name"])
                 )
-            ).scalars().all()
+                items = list((await db.execute(locked_statement)).scalars().all())
             for item in items:
                 last_seen = _aware(item.last_seen_at)
                 age_seconds = max(int((now - last_seen).total_seconds()), 0)
@@ -201,7 +232,7 @@ def worker_stale_seconds(
     limit = max(int(base_seconds), 60)
     normalized_status = str(status or "").upper()
     payload = detail or {}
-    if normalized_status == "STARTING":
+    if normalized_status in {"STARTING", "MISSING"}:
         limit = max(limit, int(startup_grace_seconds))
     if bool(payload.get("long_running")) or normalized_status == "TRAINING":
         limit = max(limit, int(long_task_grace_seconds))
@@ -228,3 +259,19 @@ def worker_is_healthy(
         long_task_grace_seconds=long_task_grace_seconds,
     )
     return str(status or "").upper() in OPERATIONAL_WORKER_STATUSES and max(int(age_seconds), 0) <= limit
+
+
+def expected_worker_names(settings: object) -> tuple[str, ...]:
+    configured = getattr(settings, "worker_heartbeat_expected_workers", None)
+    if configured is None:
+        raw = getattr(settings, "worker_heartbeat_expected_workers_raw", None)
+        configured = str(raw).split(",") if raw is not None else ()
+    if isinstance(configured, str):
+        configured = configured.split(",")
+    return tuple(
+        dict.fromkeys(
+            str(name).strip().lower()
+            for name in configured or ()
+            if str(name).strip()
+        )
+    )

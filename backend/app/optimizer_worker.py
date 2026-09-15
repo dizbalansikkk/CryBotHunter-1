@@ -31,6 +31,16 @@ async def main() -> None:
                 await heartbeat.set_status("DISABLED", {"enabled": False})
                 await asyncio.sleep(settings.strategy_optimizer_loop_seconds)
                 continue
+            total_pairs = len(settings.candle_ingest_symbols) * len(settings.candle_ingest_timeframes)
+            processed = 0
+            await heartbeat.set_status(
+                "RUNNING",
+                {
+                    "stage": "optimizer_cycle",
+                    "progress": f"0/{total_pairs}",
+                    "long_running": True,
+                },
+            )
             async with AsyncSessionLocal() as db:
                 async with locks.lock(
                     "optimizer-worker-loop",
@@ -42,6 +52,16 @@ async def main() -> None:
                         for symbol in settings.candle_ingest_symbols:
                             for timeframe in settings.candle_ingest_timeframes:
                                 key = f"{symbol}:{timeframe}"
+                                processed += 1
+                                await heartbeat.set_status(
+                                    "RUNNING",
+                                    {
+                                        "stage": "optimizing_strategy",
+                                        "pair": key,
+                                        "progress": f"{processed}/{total_pairs}",
+                                        "long_running": True,
+                                    },
+                                )
                                 if not await optimizer.needs_refresh(db, symbol, timeframe):
                                     skipped.append(key)
                                     continue
@@ -63,6 +83,11 @@ async def main() -> None:
                         await heartbeat.set_status(
                             "OK",
                             {"refreshed": len(refreshed), "skipped": len(skipped)},
+                        )
+                    else:
+                        await heartbeat.set_status(
+                            "IDLE",
+                            {"stage": "replica_wait", "reason": "lock_owned_by_another_replica"},
                         )
         except Exception as exc:
             logger.exception("Optimizer worker loop failed")

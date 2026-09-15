@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.entities import TelegramOutboxMessage, WorkerHeartbeat
 from app.services.exchange import ExchangeClient
-from app.services.heartbeat import worker_is_healthy, worker_stale_seconds
+from app.services.heartbeat import expected_worker_names, worker_is_healthy, worker_stale_seconds
 
 
 @dataclass(frozen=True)
@@ -114,8 +114,12 @@ class SystemHealthService:
                     )
                 ).scalar_one()
             )
+            expected_workers = expected_worker_names(self.settings)
+            statement = select(WorkerHeartbeat)
+            if expected_workers:
+                statement = statement.where(WorkerHeartbeat.worker_name.in_(expected_workers))
             rows = (
-                await db.execute(select(WorkerHeartbeat).order_by(WorkerHeartbeat.worker_name.asc()))
+                await db.execute(statement.order_by(WorkerHeartbeat.worker_name.asc()))
             ).scalars().all()
             stale_seconds = max(int(self.settings.worker_heartbeat_stale_seconds), 60)
             startup_grace_seconds = int(
@@ -124,8 +128,8 @@ class SystemHealthService:
             long_task_grace_seconds = int(
                 getattr(self.settings, "worker_heartbeat_long_task_grace_seconds", 900)
             )
-            workers: tuple[WorkerHealth, ...] = tuple(
-                self._worker_health(
+            workers_by_name = {
+                item.worker_name: self._worker_health(
                     item,
                     now=now,
                     stale_seconds=stale_seconds,
@@ -133,6 +137,23 @@ class SystemHealthService:
                     long_task_grace_seconds=long_task_grace_seconds,
                 )
                 for item in rows
+            }
+            for worker_name in expected_workers:
+                workers_by_name.setdefault(
+                    worker_name,
+                    WorkerHealth(
+                        name=worker_name,
+                        status="MISSING",
+                        age_seconds=0,
+                        healthy=False,
+                        detail={"stage": "awaiting_first_heartbeat", "expected": True},
+                        stale_after_seconds=max(startup_grace_seconds, stale_seconds),
+                    ),
+                )
+            worker_order = expected_workers or tuple(sorted(workers_by_name))
+            workers: tuple[WorkerHealth, ...] = tuple(
+                workers_by_name[worker_name]
+                for worker_name in worker_order
             )
             elapsed = _elapsed_ms(started)
             return ComponentHealth("PostgreSQL", True, elapsed, "запросы и мониторинг доступны"), pending, failed, workers
@@ -204,7 +225,7 @@ class SystemHealthService:
     async def _exchange_health(self) -> ComponentHealth:
         started = perf_counter()
         exchange = self.exchange_factory()
-        symbol = (self.settings.candle_ingest_symbols or ["BTC/USDT"])[0]
+        symbol = (self.settings.candle_ingest_symbols or ["ETH/USDT"])[0]
         try:
             candles = await asyncio.wait_for(exchange.fetch_ohlcv(symbol, "1m", 2), timeout=12)
             if not candles:

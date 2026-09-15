@@ -98,16 +98,63 @@ def test_learning_block_requires_repeated_specific_losing_setup():
     service = LearningService()
     broad_rule = learning_rule("rsi_bucket", observations=5, losses=5)
     first_setup_loss = learning_rule("setup_signature", observations=1, losses=1)
-    repeated_setup_loss = learning_rule("setup_signature", observations=2, losses=2)
+    global_setup_loss = learning_rule("setup_signature", observations=5, losses=5)
+    repeated_setup_loss = learning_rule(
+        "setup_signature",
+        observations=4,
+        losses=4,
+        scope="ETH/USDT",
+        updated_at=datetime.now(timezone.utc),
+    )
 
     assert not service._has_block_evidence([(broad_rule, 3.0, "broad")])
     assert not service._has_block_evidence([(first_setup_loss, 3.0, "first")])
+    assert not service._has_block_evidence([(global_setup_loss, 3.0, "global")])
     assert service._has_block_evidence([(repeated_setup_loss, 3.0, "repeated")])
+
+
+def test_learning_old_specific_loss_only_reduces_risk_instead_of_blocking_forever():
+    service = LearningService()
+    old_setup = learning_rule(
+        "setup_signature",
+        penalty=5.0,
+        observations=8,
+        losses=8,
+        scope="ETH/USDT",
+        updated_at=datetime.now(timezone.utc) - timedelta(days=8),
+    )
+
+    assert not service._has_block_evidence([(old_setup, 3.2, "old")])
+
+
+def test_learning_aggregates_correlated_features_by_scope():
+    service = LearningService()
+    global_rule = learning_rule("trend_stack", scope="GLOBAL")
+    symbol_rule = learning_rule("regime", scope="ETH/USDT")
+    another_symbol_rule = learning_rule("atr_bucket", scope="ETH/USDT")
+
+    total = service.aggregate_penalty(
+        [
+            (global_rule, 1.0, "global"),
+            (symbol_rule, 1.2, "symbol"),
+            (another_symbol_rule, 1.1, "correlated"),
+        ]
+    )
+
+    assert total == 1.45
 
 
 def test_learning_insights_explain_protective_and_favorable_patterns():
     service = LearningService()
-    losing = learning_rule("setup_signature", penalty=3.0, observations=4, wins=0, losses=4)
+    losing = learning_rule(
+        "setup_signature",
+        penalty=3.0,
+        observations=4,
+        wins=0,
+        losses=4,
+        scope="ETH/USDT",
+        updated_at=datetime.now(timezone.utc),
+    )
     winning = learning_rule("trend_stack", penalty=0.0, observations=4, wins=3, losses=1)
     winning.total_profit = 18
 
@@ -127,9 +174,11 @@ def learning_rule(
     observations: int = 2,
     wins: int = 0,
     losses: int = 2,
+    scope: str = "GLOBAL",
+    updated_at: datetime | None = None,
 ) -> LearningRule:
     return LearningRule(
-        scope="GLOBAL",
+        scope=scope,
         side="LONG",
         feature_key=feature_key,
         feature_value="test",
@@ -138,4 +187,5 @@ def learning_rule(
         wins=wins,
         losses=losses,
         total_profit=-10.0,
+        updated_at=updated_at,
     )

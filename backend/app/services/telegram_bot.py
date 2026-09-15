@@ -18,7 +18,12 @@ from app.models.entities import (
 )
 from app.services.control import TradingControlService
 from app.services.exchange import ExchangeClient
-from app.services.heartbeat import HeartbeatReporter, WorkerHeartbeatService, worker_is_healthy
+from app.services.heartbeat import (
+    HeartbeatReporter,
+    WorkerHeartbeatService,
+    expected_worker_names,
+    worker_is_healthy,
+)
 from app.services.performance_guard import PerformanceGuardService
 from app.services.pnl import PnlMetricsService
 from app.services.reconciliation import OrderReconciliationService
@@ -213,16 +218,30 @@ class TelegramCommandService:
         if command == "/stop":
             return "Остановить сервис можно в Railway. Для временной остановки новых входов используй /panic."
         if command == "/panic":
-            if not await TradingControlService().panic("telegram"):
+            control = TradingControlService()
+            try:
+                applied = await control.panic("telegram")
+            finally:
+                await control.close()
+            if not applied:
                 return "Redis unavailable. Panic state could not be persisted; trading remains fail-closed."
             return "PANIC enabled. New entries are paused. Open positions will still be managed."
         if command == "/resume":
-            if not await TradingControlService().resume():
+            control = TradingControlService()
+            try:
+                applied = await control.resume()
+            finally:
+                await control.close()
+            if not applied:
                 return "Redis unavailable. Trading remains fail-closed."
             return "Trading resumed. New entries are allowed again."
         if command == "/status":
             settings = get_settings()
-            paused, reason = await TradingControlService().is_paused()
+            control = TradingControlService()
+            try:
+                paused, reason = await control.is_paused()
+            finally:
+                await control.close()
             open_positions = (
                 await db.execute(select(func.count()).select_from(Position).where(Position.status == "OPEN"))
             ).scalar_one()
@@ -233,8 +252,14 @@ class TelegramCommandService:
                     .where(TelegramOutboxMessage.status.in_(("PENDING", "RETRY", "SENDING")))
                 )
             ).scalar_one()
+            expected_workers = expected_worker_names(settings)
+            heartbeat_statement = select(WorkerHeartbeat)
+            if expected_workers:
+                heartbeat_statement = heartbeat_statement.where(
+                    WorkerHeartbeat.worker_name.in_(expected_workers)
+                )
             heartbeats = (
-                await db.execute(select(WorkerHeartbeat).order_by(WorkerHeartbeat.worker_name.asc()))
+                await db.execute(heartbeat_statement.order_by(WorkerHeartbeat.worker_name.asc()))
             ).scalars().all()
             mode = "PAPER — виртуальные деньги" if settings.paper_trading else "LIVE — реальные ордера"
             report = (
@@ -250,10 +275,15 @@ class TelegramCommandService:
                 f"├ Полная сводка: <code>{settings.telegram_cycle_report_interval_minutes} мин.</code>\n"
                 f"└ Telegram outbox: <code>{int(pending_notifications)} в очереди</code>"
             )
-            if heartbeats:
+            missing_workers = [
+                worker_name
+                for worker_name in expected_workers
+                if worker_name not in {item.worker_name for item in heartbeats}
+            ]
+            if heartbeats or missing_workers:
                 heartbeat_now = datetime.now(timezone.utc)
                 stale_seconds = max(int(settings.worker_heartbeat_stale_seconds), 60)
-                report += "\n\n<b>Worker heartbeat</b>\n" + "\n".join(
+                heartbeat_lines = [
                     _heartbeat_status_line(
                         item,
                         settings=settings,
@@ -261,14 +291,24 @@ class TelegramCommandService:
                         stale_seconds=stale_seconds,
                     )
                     for item in heartbeats
+                ]
+                heartbeat_lines.extend(
+                    f"🔴 {escape(worker_name)} · <code>{escape(worker_status_label('MISSING'))}</code>\n"
+                    "   первый heartbeat ещё не получен"
+                    for worker_name in missing_workers
                 )
+                report += "\n\n<b>Worker heartbeat</b>\n" + "\n".join(heartbeat_lines)
             return report
         if command == "/health":
             snapshot = await SystemHealthService().snapshot(db)
             return format_system_health(snapshot)
         if command == "/balance":
-            balance = await ExchangeClient().get_balance()
-            return "Баланс:\n" + "\n".join([f"{asset}: {amount:.2f}" for asset, amount in balance.items()])
+            exchange = ExchangeClient()
+            try:
+                balance = await exchange.get_balance()
+                return "Баланс:\n" + "\n".join([f"{asset}: {amount:.2f}" for asset, amount in balance.items()])
+            finally:
+                await exchange.close()
         if command == "/stats":
             pnl = await PnlMetricsService().summary(db)
             return (

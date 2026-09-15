@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.entities import LearningRule, Position, RlModel, TelegramOutboxMessage, WorkerHeartbeat
-from app.services.heartbeat import worker_is_healthy
+from app.services.heartbeat import expected_worker_names, worker_is_healthy
 from app.services.pnl import PnlMetricsService
 
 
@@ -73,12 +73,19 @@ class TelegramDailyReportService:
                 )
             )
         ).one()
+        active_models_statement = (
+            select(func.count()).select_from(RlModel).where(RlModel.is_active.is_(True))
+        )
+        rl_symbols = getattr(self.settings, "rl_symbols", None)
+        rl_timeframes = getattr(self.settings, "candle_ingest_timeframes", None)
+        if rl_symbols:
+            active_models_statement = active_models_statement.where(RlModel.symbol.in_(rl_symbols))
+        if rl_timeframes:
+            active_models_statement = active_models_statement.where(
+                RlModel.timeframe.in_(rl_timeframes)
+            )
         active_models = int(
-            (
-                await db.execute(
-                    select(func.count()).select_from(RlModel).where(RlModel.is_active.is_(True))
-                )
-            ).scalar_one()
+            (await db.execute(active_models_statement)).scalar_one()
         )
         pending = int(
             (
@@ -98,9 +105,17 @@ class TelegramDailyReportService:
                 )
             ).scalar_one()
         )
+        expected_workers = expected_worker_names(self.settings)
+        heartbeat_statement = select(WorkerHeartbeat)
+        if expected_workers:
+            heartbeat_statement = heartbeat_statement.where(
+                WorkerHeartbeat.worker_name.in_(expected_workers)
+            )
         heartbeat_rows = (
-            await db.execute(select(WorkerHeartbeat).order_by(WorkerHeartbeat.worker_name.asc()))
+            await db.execute(heartbeat_statement.order_by(WorkerHeartbeat.worker_name.asc()))
         ).scalars().all()
+        heartbeats_by_name = {item.worker_name: item for item in heartbeat_rows}
+        worker_names = expected_workers or tuple(sorted(heartbeats_by_name))
         stale_seconds = max(int(self.settings.worker_heartbeat_stale_seconds), 60)
         startup_grace_seconds = int(
             getattr(self.settings, "worker_heartbeat_startup_grace_seconds", 600)
@@ -109,15 +124,26 @@ class TelegramDailyReportService:
             getattr(self.settings, "worker_heartbeat_long_task_grace_seconds", 900)
         )
         unhealthy_workers = tuple(
-            item.worker_name
-            for item in heartbeat_rows
-            if not worker_is_healthy(
-                status=item.status,
-                age_seconds=max(int((generated_at - _aware(item.last_seen_at)).total_seconds()), 0),
-                base_seconds=stale_seconds,
-                detail=getattr(item, "detail", None) or {},
-                startup_grace_seconds=startup_grace_seconds,
-                long_task_grace_seconds=long_task_grace_seconds,
+            worker_name
+            for worker_name in worker_names
+            if (
+                worker_name not in heartbeats_by_name
+                or not worker_is_healthy(
+                    status=heartbeats_by_name[worker_name].status,
+                    age_seconds=max(
+                        int(
+                            (
+                                generated_at
+                                - _aware(heartbeats_by_name[worker_name].last_seen_at)
+                            ).total_seconds()
+                        ),
+                        0,
+                    ),
+                    base_seconds=stale_seconds,
+                    detail=getattr(heartbeats_by_name[worker_name], "detail", None) or {},
+                    startup_grace_seconds=startup_grace_seconds,
+                    long_task_grace_seconds=long_task_grace_seconds,
+                )
             )
         )
 
@@ -143,8 +169,8 @@ class TelegramDailyReportService:
             learning_rules=int(learning_row[0]),
             learning_observations=int(learning_row[1]),
             active_rl_models=active_models,
-            healthy_workers=len(heartbeat_rows) - len(unhealthy_workers),
-            total_workers=len(heartbeat_rows),
+            healthy_workers=len(worker_names) - len(unhealthy_workers),
+            total_workers=len(worker_names),
             unhealthy_workers=unhealthy_workers,
             pending_notifications=pending,
             failed_notifications=failed,

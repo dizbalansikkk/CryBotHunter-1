@@ -31,11 +31,31 @@ def test_rl_worker_trains_by_default(monkeypatch):
     assert Settings(_env_file=None).rl_trainer_enabled is True
 
 
-def test_default_market_universe_has_twelve_liquid_pairs():
+def test_default_market_universe_excludes_bitcoin_and_expands_altcoin_coverage():
     settings = Settings(_env_file=None)
 
-    assert len(settings.market_scan_symbols) == 12
-    assert {"BTC/USDT", "ETH/USDT", "LINK/USDT", "TRX/USDT"}.issubset(settings.market_scan_symbols)
+    assert len(settings.market_scan_symbols) == 16
+    assert "BTC/USDT" not in settings.market_scan_symbols
+    assert {"ETH/USDT", "LINK/USDT", "TRX/USDT", "AAVE/USDT", "UNI/USDT", "NEAR/USDT"}.issubset(
+        settings.market_scan_symbols
+    )
+    assert settings.rl_symbols == settings.market_scan_symbols
+    assert settings.rl_training_max_per_cycle == 1
+
+
+def test_exclusion_overrides_legacy_railway_symbol_lists():
+    settings = Settings(
+        _env_file=None,
+        MARKET_SCAN_SYMBOLS="BTC/USDT,eth/usdt,SOL/USDT",
+        CANDLE_INGEST_SYMBOLS="BTC/USDT,ETH/USDT",
+        RL_SYMBOLS="BTC/USDT,SOL/USDT",
+        TRADING_EXCLUDED_SYMBOLS="btc/usdt",
+    )
+
+    assert settings.market_scan_symbols == ["ETH/USDT", "SOL/USDT"]
+    assert settings.candle_ingest_symbols == ["ETH/USDT"]
+    assert settings.rl_symbols == ["SOL/USDT"]
+    assert settings.is_symbol_excluded("btc/usdt") is True
 
 
 def test_strong_spot_setup_can_reach_tradeable_rating_without_open_interest():
@@ -65,6 +85,32 @@ def test_strong_spot_setup_can_reach_tradeable_rating_without_open_interest():
     assert StrategyCore().evaluate(coin).signal == "BUY"
 
 
+def test_adaptive_liquidity_rating_keeps_clean_altcoin_setup_tradeable():
+    scanner = MarketScanner()
+    coin = scanner._coin_from_row(
+        {
+            "symbol": "AAVE/USDT",
+            "price": 110.0,
+            "volume_24h": 20_000_000.0,
+            "price_change_percent": 2.0,
+            "atr": 2.5,
+            "rsi": 62.0,
+            "ema20": 105.0,
+            "ema50": 100.0,
+            "ema200": 95.0,
+            "macd": 1.0,
+            "funding_rate": 0.0,
+            "open_interest": 0.0,
+            "bid": 109.97,
+            "ask": 110.03,
+            "spread_bps": 5.45,
+        }
+    )
+
+    assert coin.rating > 80
+    assert StrategyCore().evaluate(coin).signal == "BUY"
+
+
 @pytest.mark.asyncio
 async def test_history_fetches_multiple_real_market_pages():
     exchange = PagedExchange()
@@ -87,3 +133,21 @@ async def test_real_scanner_does_not_hide_exchange_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="exchange unavailable"):
         await MarketScanner(FailingExchange()).scan(["BTC/USDT"])
+
+
+@pytest.mark.asyncio
+async def test_scanner_never_requests_excluded_symbol(monkeypatch):
+    class Exchange:
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_tickers(self, _symbols):
+            self.calls += 1
+            return {}
+
+    exchange = Exchange()
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr("app.services.market_scanner.get_settings", lambda: settings)
+
+    assert await MarketScanner(exchange).scan(["btc/usdt"]) == []
+    assert exchange.calls == 0
