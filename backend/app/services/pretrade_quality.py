@@ -33,6 +33,8 @@ class PreTradeQualityGate:
         symbol: str,
         timeframe: str,
         risk_settings: RiskSettings,
+        *,
+        learning_probe: bool = False,
     ) -> PreTradeQualityAssessment:
         if not self.settings.pretrade_quality_enabled:
             return PreTradeQualityAssessment(True, "pre-trade quality gate disabled", 0)
@@ -56,7 +58,7 @@ class PreTradeQualityGate:
         test_size = max(80, min(160, len(candles) // 4))
         step_size = max(60, test_size)
         report = self.backtester.walk_forward(candles, train_size=train_size, test_size=test_size, step_size=step_size)
-        return self._decision(report, len(candles), risk_settings)
+        return self._decision(report, len(candles), risk_settings, learning_probe=learning_probe)
 
     async def _recent_candles(self, db: AsyncSession, symbol: str, timeframe: str, limit: int) -> list[Candle]:
         result = await db.execute(
@@ -72,6 +74,8 @@ class PreTradeQualityGate:
         report: WalkForwardReport,
         candles_checked: int,
         risk_settings: RiskSettings,
+        *,
+        learning_probe: bool = False,
     ) -> PreTradeQualityAssessment:
         if report.window_count <= 0:
             return PreTradeQualityAssessment(
@@ -83,6 +87,26 @@ class PreTradeQualityGate:
 
         total_test_trades = sum(window.test_trades_count for window in report.windows)
         profitable_windows_percent = report.profitable_windows / report.window_count * 100
+        if (
+            learning_probe
+            and total_test_trades < self.settings.pretrade_quality_min_trades
+            and report.total_profit >= 0
+        ):
+            return PreTradeQualityAssessment(
+                allowed=True,
+                reason=(
+                    "paper learning quality is inconclusive: strict strategy produced "
+                    f"{total_test_trades} comparable trades; risk reduced to "
+                    f"{self.settings.pretrade_quality_min_risk_multiplier:.2f}x"
+                ),
+                candles_checked=candles_checked,
+                risk_multiplier=self.settings.pretrade_quality_min_risk_multiplier,
+                window_count=report.window_count,
+                profitable_windows_percent=round(profitable_windows_percent, 2),
+                average_win_rate=report.average_win_rate,
+                average_profit_factor=report.average_profit_factor,
+                total_profit=report.total_profit,
+            )
         hard_reasons: list[str] = []
         soft_reasons: list[str] = []
         profit_factor_floor = self.settings.pretrade_quality_min_profit_factor * 0.75

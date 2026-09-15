@@ -16,6 +16,12 @@ from app.models.entities import WorkerHeartbeat
 logger = logging.getLogger(__name__)
 
 
+OPERATIONAL_WORKER_STATUSES = frozenset(
+    {"OK", "IDLE", "RUNNING", "TRAINING", "STARTING", "PAUSED", "DISABLED"}
+)
+SUCCESSFUL_WORKER_STATUSES = frozenset({"OK", "IDLE"})
+
+
 @dataclass(frozen=True)
 class HeartbeatEvent:
     kind: str
@@ -24,6 +30,7 @@ class HeartbeatEvent:
     detail: dict
     last_seen_at: datetime
     age_seconds: int
+    stale_after_seconds: int
 
 
 class WorkerHeartbeatService:
@@ -42,7 +49,7 @@ class WorkerHeartbeatService:
             item.status = status[:16]
             item.detail = detail or {}
             item.last_seen_at = now
-            if status == "OK":
+            if status.upper() in SUCCESSFUL_WORKER_STATUSES:
                 item.last_success_at = now
             await db.commit()
 
@@ -51,6 +58,14 @@ class WorkerHeartbeatService:
             return []
         now = datetime.now(timezone.utc)
         stale_seconds = max(int(self.settings.worker_heartbeat_stale_seconds), 60)
+        startup_grace_seconds = max(
+            int(getattr(self.settings, "worker_heartbeat_startup_grace_seconds", 600)),
+            stale_seconds,
+        )
+        long_task_grace_seconds = max(
+            int(getattr(self.settings, "worker_heartbeat_long_task_grace_seconds", 900)),
+            stale_seconds,
+        )
         events: list[HeartbeatEvent] = []
         async with AsyncSessionLocal() as db:
             items = (
@@ -63,11 +78,18 @@ class WorkerHeartbeatService:
             for item in items:
                 last_seen = _aware(item.last_seen_at)
                 age_seconds = max(int((now - last_seen).total_seconds()), 0)
+                effective_stale_seconds = worker_stale_seconds(
+                    base_seconds=stale_seconds,
+                    status=item.status,
+                    detail=item.detail or {},
+                    startup_grace_seconds=startup_grace_seconds,
+                    long_task_grace_seconds=long_task_grace_seconds,
+                )
                 transition = heartbeat_transition(
                     last_seen=last_seen,
                     stale_alerted=item.stale_alerted,
                     now=now,
-                    stale_seconds=stale_seconds,
+                    stale_seconds=effective_stale_seconds,
                 )
                 if transition == "STALE":
                     item.stale_alerted = True
@@ -79,6 +101,7 @@ class WorkerHeartbeatService:
                             detail=item.detail or {},
                             last_seen_at=last_seen,
                             age_seconds=age_seconds,
+                            stale_after_seconds=effective_stale_seconds,
                         )
                     )
                 elif transition == "RECOVERED":
@@ -91,6 +114,7 @@ class WorkerHeartbeatService:
                             detail=item.detail or {},
                             last_seen_at=last_seen,
                             age_seconds=age_seconds,
+                            stale_after_seconds=effective_stale_seconds,
                         )
                     )
             await db.commit()
@@ -103,7 +127,7 @@ class HeartbeatReporter:
         self.settings = get_settings()
         self.service = WorkerHeartbeatService()
         self.status = "STARTING"
-        self.detail: dict = {}
+        self.detail: dict = {"stage": "startup"}
         self._task: asyncio.Task | None = None
         self._write_lock = asyncio.Lock()
 
@@ -163,3 +187,44 @@ def heartbeat_transition(
     if not is_stale and stale_alerted:
         return "RECOVERED"
     return None
+
+
+def worker_stale_seconds(
+    *,
+    base_seconds: int,
+    status: str,
+    detail: dict | None = None,
+    startup_grace_seconds: int = 600,
+    long_task_grace_seconds: int = 900,
+) -> int:
+    """Return a status-aware watchdog limit without hiding indefinite hangs."""
+    limit = max(int(base_seconds), 60)
+    normalized_status = str(status or "").upper()
+    payload = detail or {}
+    if normalized_status == "STARTING":
+        limit = max(limit, int(startup_grace_seconds))
+    if bool(payload.get("long_running")) or normalized_status == "TRAINING":
+        limit = max(limit, int(long_task_grace_seconds))
+    requested_limit = payload.get("stale_after_seconds")
+    if isinstance(requested_limit, (int, float)) and not isinstance(requested_limit, bool):
+        limit = max(limit, min(int(requested_limit), 3600))
+    return max(limit, 60)
+
+
+def worker_is_healthy(
+    *,
+    status: str,
+    age_seconds: int,
+    base_seconds: int,
+    detail: dict | None = None,
+    startup_grace_seconds: int = 600,
+    long_task_grace_seconds: int = 900,
+) -> bool:
+    limit = worker_stale_seconds(
+        base_seconds=base_seconds,
+        status=status,
+        detail=detail,
+        startup_grace_seconds=startup_grace_seconds,
+        long_task_grace_seconds=long_task_grace_seconds,
+    )
+    return str(status or "").upper() in OPERATIONAL_WORKER_STATUSES and max(int(age_seconds), 0) <= limit

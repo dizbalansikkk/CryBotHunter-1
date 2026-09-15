@@ -2,9 +2,13 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.entities import Position
 from app.schemas.dto import PositionUpdateOut, TradingDecision, TradingRunOut, TradingTickOut
+from app.services.system_health import ComponentHealth, SystemHealthSnapshot, WorkerHealth
+from app.services.telegram_daily import DailyPosition, DailyReportSnapshot
 from app.services.telegram_reports import (
     format_cycle_report,
+    format_daily_report,
     format_position_details,
+    format_system_health,
     format_trade_closed,
     format_trade_opened,
     format_worker_heartbeat_event,
@@ -149,9 +153,70 @@ def test_worker_heartbeat_alert_is_readable_and_escaped():
         status="ERROR",
         age_seconds=205,
         detail={"error": "HTTP <timeout>"},
+        stale_after_seconds=180,
     )
 
     assert "trader-worker" in report
     assert "3 мин 25 сек" in report
+    assert "Порог тревоги" in report
     assert "HTTP &lt;timeout&gt;" in report
+    assert report.count("<b>") == report.count("</b>")
+
+
+def test_system_health_report_contains_dependencies_queue_and_workers():
+    now = datetime(2026, 7, 21, 18, tzinfo=timezone.utc)
+    snapshot = SystemHealthSnapshot(
+        generated_at=now,
+        database=ComponentHealth("PostgreSQL", True, 12, "запросы доступны"),
+        redis=ComponentHealth("Redis", True, 4, "координация доступна"),
+        exchange=ComponentHealth("Binance", False, 12000, "TimeoutError"),
+        workers=(WorkerHealth("trader", "OK", 15, True),),
+        pending_notifications=2,
+        failed_notifications=1,
+        trading_paused=False,
+        pause_reason=None,
+        paper_trading=True,
+    )
+
+    report = format_system_health(snapshot)
+
+    assert "ТРЕБУЕТ ВНИМАНИЯ" in report
+    assert "PostgreSQL" in report
+    assert "Binance" in report
+    assert "TimeoutError" in report
+    assert "Ожидают отправки: <code>2</code>" in report
+    assert "trader" in report
+    assert report.count("<b>") == report.count("</b>")
+
+
+def test_daily_report_is_detailed_and_readable():
+    snapshot = DailyReportSnapshot(
+        generated_at=datetime(2026, 7, 21, 18, tzinfo=timezone.utc),
+        paper_trading=True,
+        pnl_day=-3.25,
+        pnl_week=8.5,
+        total_pnl=42.0,
+        open_pnl=-1.25,
+        win_rate=55.5,
+        trades_count=9,
+        closed_today=2,
+        positions=(DailyPosition("BTC/USDT", "LONG", -1.25, 118_000),),
+        learning_rules=7,
+        learning_observations=14,
+        active_rl_models=1,
+        healthy_workers=4,
+        total_workers=5,
+        unhealthy_workers=("optimizer",),
+        pending_notifications=3,
+        failed_notifications=0,
+    )
+
+    report = format_daily_report(snapshot)
+
+    assert "ЕЖЕДНЕВНЫЙ ОТЧЁТ" in report
+    assert "PnL за день: <b>-3.25 USDT</b>" in report
+    assert "BTC/USDT" in report
+    assert "Правил из сделок: <code>7</code>" in report
+    assert "optimizer" in report
+    assert "включает текущий плавающий результат" in report
     assert report.count("<b>") == report.count("</b>")

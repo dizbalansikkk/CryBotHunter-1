@@ -203,6 +203,38 @@ async def test_network_failure_retries_with_backoff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_paper_preflight_network_exhaustion_starts_degraded(monkeypatch, caplog):
+    clear_safety_environment(monkeypatch)
+    monkeypatch.setenv("SAFETY_RETRY_ATTEMPTS", "2")
+    monkeypatch.setenv("SAFETY_RETRY_INITIAL_SECONDS", "0")
+    fake = FakeExchange(fail_time_attempts=10)
+
+    with caplog.at_level(logging.ERROR):
+        report = await SafetyManager(exchange_factory=lambda _config: fake).run_or_exit()
+
+    assert report.ok is False
+    assert report.mode == "PAPER"
+    assert fake.time_calls == 2
+    assert "starting worker so runtime cycles can retry safely" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_live_preflight_network_exhaustion_still_exits(monkeypatch):
+    clear_safety_environment(monkeypatch)
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_SECRET", "test-secret")
+    monkeypatch.setenv("SAFETY_RETRY_ATTEMPTS", "1")
+    fake = FakeExchange(fail_time_attempts=10)
+
+    with pytest.raises(SystemExit) as exc_info:
+        await SafetyManager(exchange_factory=lambda _config: fake).run_or_exit()
+
+    assert exc_info.value.code == 1
+
+
+@pytest.mark.asyncio
 async def test_invalid_exchange_payload_stops_worker(monkeypatch):
     clear_safety_environment(monkeypatch)
     fake = FakeExchange(ticker={"symbol": "BTC/USDT", "last": 0})

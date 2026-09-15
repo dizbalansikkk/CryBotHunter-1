@@ -5,7 +5,13 @@ from PIL import Image
 
 from app.models.entities import Position
 from app.schemas.dto import TradingDecision, TradingRunOut, TradingTickOut
-from app.services.telegram_cards import CARD_SIZE, render_cycle_card, render_position_card
+from app.services.telegram_cards import (
+    CARD_SIZE,
+    render_cycle_card,
+    render_daily_report_card,
+    render_position_card,
+)
+from app.services.telegram_daily import DailyPosition, DailyReportSnapshot
 
 
 def position() -> Position:
@@ -86,5 +92,32 @@ def test_cycle_card_is_rendered_as_telegram_ready_jpeg():
     tick = TradingTickOut(checked=3, closed=0, updated=[])
 
     payload = render_cycle_card(run, tick, paper_trading=True)
+
+    assert_valid_card(payload)
+
+
+def test_daily_report_card_is_rendered_as_telegram_ready_jpeg():
+    snapshot = DailyReportSnapshot(
+        generated_at=datetime(2026, 7, 21, 18, tzinfo=timezone.utc),
+        paper_trading=True,
+        pnl_day=12.5,
+        pnl_week=31.25,
+        total_pnl=105.75,
+        open_pnl=4.5,
+        win_rate=62.5,
+        trades_count=16,
+        closed_today=2,
+        positions=(DailyPosition("BTC/USDT", "LONG", 4.5, 118_000),),
+        learning_rules=8,
+        learning_observations=16,
+        active_rl_models=2,
+        healthy_workers=5,
+        total_workers=5,
+        unhealthy_workers=(),
+        pending_notifications=0,
+        failed_notifications=0,
+    )
+
+    payload = render_daily_report_card(snapshot)
 
     assert_valid_card(payload)

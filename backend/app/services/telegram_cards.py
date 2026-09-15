@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.models.entities import Position
 from app.schemas.dto import TradingRunOut, TradingTickOut
+from app.services.telegram_daily import DailyReportSnapshot
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,14 @@ def safe_render_cycle_card(
         return render_cycle_card(run, tick, paper_trading=paper_trading)
     except (OSError, ValueError):
         logger.exception("Failed to render Telegram cycle card")
+        return None
+
+
+def safe_render_daily_report_card(snapshot: DailyReportSnapshot) -> bytes | None:
+    try:
+        return render_daily_report_card(snapshot)
+    except (OSError, ValueError):
+        logger.exception("Failed to render Telegram daily report card")
         return None
 
 
@@ -188,6 +197,43 @@ def render_cycle_card(
     best = sorted(run.decisions, key=lambda item: item.score, reverse=True)[:3]
     summary = " · ".join(f"{item.symbol} {item.signal} {item.score}/100" for item in best)
     _footer(draw, summary or "Сигналов для отображения пока нет")
+    return _encode(image)
+
+
+def render_daily_report_card(snapshot: DailyReportSnapshot) -> bytes:
+    accent = GREEN if snapshot.pnl_day >= 0 else RED
+    image = _base_card(accent)
+    draw = ImageDraw.Draw(image, "RGBA")
+    mode = "PAPER" if snapshot.paper_trading else "LIVE"
+    _header(
+        draw,
+        title="ЕЖЕДНЕВНЫЙ ОТЧЁТ",
+        symbol=f"ПОРТФЕЛЬ · {mode}",
+        side="",
+        accent=accent,
+        identifier="CRYBOTHUNTER",
+    )
+    _primary_block(
+        draw,
+        "PNL ЗА ДЕНЬ",
+        f"{snapshot.pnl_day:+.2f} USDT",
+        f"открытых {len(snapshot.positions)} · закрыто сегодня {snapshot.closed_today}",
+        accent,
+    )
+    metrics = [
+        ("ОТКРЫТЫЙ PNL", f"{snapshot.open_pnl:+.2f} USDT"),
+        ("ОБЩИЙ PNL", f"{snapshot.total_pnl:+.2f} USDT"),
+        ("ПРИБЫЛЬНЫХ СДЕЛОК", f"{snapshot.win_rate:.2f}%"),
+        ("ВОРКЕРЫ", f"{snapshot.healthy_workers} / {snapshot.total_workers}"),
+    ]
+    _metric_grid(draw, metrics, accent)
+    _footer(
+        draw,
+        (
+            f"СДЕЛОК {snapshot.trades_count}  ·  ПРАВИЛ {snapshot.learning_rules}  ·  "
+            f"OUTBOX {snapshot.pending_notifications}  ·  {snapshot.generated_at:%d.%m.%Y %H:%M} UTC"
+        ),
+    )
     return _encode(image)
 
 

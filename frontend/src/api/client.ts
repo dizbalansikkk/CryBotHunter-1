@@ -43,10 +43,70 @@ export type Position = {
   highest_price: number;
   lowest_price: number;
   pnl: number;
+  entry_context: Record<string, unknown>;
   status: string;
   exit_reason?: string | null;
   entered_at: string;
   closed_at?: string | null;
+};
+
+export type TradeHistoryItem = {
+  id: number;
+  symbol: string;
+  side: string;
+  entered_at?: string | null;
+  closed_at?: string | null;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  return_percent: number;
+  result: "WIN" | "LOSS" | "BREAKEVEN";
+  exit_reason?: string | null;
+  duration_minutes?: number | null;
+  confidence?: number | null;
+  consensus_score?: number | null;
+  signal_score?: number | null;
+  risk_percent?: number | null;
+  risk_reward_ratio?: number | null;
+  paper_exploration: boolean;
+  entry_reasons: string[];
+  decision_reason: string;
+};
+
+export type SymbolPerformance = {
+  symbol: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+  average_pnl: number;
+  profit_factor?: number | null;
+  expectancy: number;
+};
+
+export type TradeAnalytics = {
+  closed_trades: number;
+  open_positions: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate: number;
+  total_realized_pnl: number;
+  open_pnl: number;
+  net_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+  profit_factor?: number | null;
+  expectancy: number;
+  average_win: number;
+  average_loss: number;
+  best_trade: number;
+  worst_trade: number;
+  max_win_streak: number;
+  max_loss_streak: number;
+  by_symbol: SymbolPerformance[];
+  recent_trades: TradeHistoryItem[];
 };
 
 export type Order = {
@@ -72,6 +132,7 @@ export type Dashboard = {
   win_rate: number;
   trades_count: number;
   active_positions: Position[];
+  analytics: TradeAnalytics;
 };
 
 export type TradingDecision = {
@@ -136,6 +197,9 @@ export type PerformanceGuard = {
   win_rate: number;
   loss_streak: number;
   total_profit: number;
+  recovery_mode: boolean;
+  risk_multiplier: number;
+  retry_at: string | null;
 };
 
 export type BacktestReport = {
@@ -282,6 +346,79 @@ export type LearningSummary = {
   total_wins: number;
 };
 
+export type LearningInsight = {
+  impact: "PREFER" | "WATCH" | "CAUTION" | "AVOID";
+  scope: string;
+  side: string;
+  feature_key: string;
+  feature_value: string;
+  observations: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_profit: number;
+  effective_penalty: number;
+  confidence: number;
+  risk_level: string;
+  explanation: string;
+  last_reason?: string | null;
+};
+
+export type LearningInsights = {
+  learned_from_trades: number;
+  rules_updated: number;
+  strong_patterns: number;
+  protective_patterns: number;
+  favorable_patterns: number;
+  insights: LearningInsight[];
+};
+
+export type LearningMilestone = {
+  key: string;
+  current: number;
+  target: number;
+  progress_percent: number;
+  complete: boolean;
+};
+
+export type TradeBlocker = {
+  reason: string;
+  count: number;
+};
+
+export type LearningProgress = {
+  stage: "COLLECTING" | "CALIBRATING" | "LEARNING" | "MATURE";
+  overall_progress_percent: number;
+  next_milestone?: string | null;
+  closed_trades: number;
+  closed_24h: number;
+  closed_7d: number;
+  open_positions: number;
+  exploration_open_positions: number;
+  exploration_closed_trades: number;
+  exploration_closed_24h: number;
+  signals_24h: number;
+  directional_signals_24h: number;
+  waits_24h: number;
+  agent_decisions_24h: number;
+  learning_rules: number;
+  learning_observations: number;
+  active_rl_pairs: number;
+  trained_rl_models: number;
+  optimized_pairs: number;
+  candle_pairs_ready: number;
+  candle_pairs_total: number;
+  guard_allowed: boolean;
+  guard_recovery_mode: boolean;
+  guard_reason: string;
+  last_signal_at?: string | null;
+  last_trade_closed_at?: string | null;
+  last_learning_at?: string | null;
+  last_agent_decision_at?: string | null;
+  milestones: LearningMilestone[];
+  top_blockers_24h: TradeBlocker[];
+};
+
 export type ActionMessage = {
   ok: boolean;
   message: string;
@@ -315,6 +452,30 @@ export type AgentDecision = {
   confidence: number;
   rationale: string;
   context: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+export type AgentActivityItem = {
+  agent_name: string;
+  decisions: number;
+  decisions_24h: number;
+  average_confidence: number;
+  directional_votes: number;
+  approvals: number;
+  blocks: number;
+  waits: number;
+  last_action: string;
+  last_symbol: string;
+  last_seen_at?: string | null;
+};
+
+export type AgentActivity = {
+  total_decisions: number;
+  decisions_24h: number;
+  active_agents: number;
+  committee_approvals: number;
+  last_decision_at?: string | null;
+  agents: AgentActivityItem[];
 };
 
 export type AgentAnalysis = {

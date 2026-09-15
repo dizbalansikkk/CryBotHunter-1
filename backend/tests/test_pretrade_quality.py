@@ -95,3 +95,46 @@ def test_pretrade_quality_allows_stable_walk_forward():
     assert decision.reason == "pre-trade quality passed"
     assert decision.profitable_windows_percent == 100.0
     assert decision.risk_multiplier == 1.0
+
+
+def test_paper_learning_probe_can_collect_unknown_setup_at_minimum_risk():
+    gate = PreTradeQualityGate()
+    unknown_report = report(
+        windows=[window(test_profit=0.0, test_win_rate=0.0, test_profit_factor=0.0, test_trades_count=0)],
+        profitable_windows=0,
+        total_profit=0.0,
+        average_win_rate=0.0,
+        average_profit_factor=0.0,
+    )
+
+    decision = gate._decision(
+        unknown_report,
+        candles_checked=500,
+        risk_settings=risk_settings(),
+        learning_probe=True,
+    )
+
+    assert decision.allowed is True
+    assert decision.risk_multiplier == gate.settings.pretrade_quality_min_risk_multiplier
+    assert "inconclusive" in decision.reason
+
+
+def test_paper_learning_probe_still_blocks_negative_sparse_history():
+    gate = PreTradeQualityGate()
+    losing_report = report(
+        windows=[window(test_profit=-2.0, test_win_rate=0.0, test_profit_factor=0.0, test_trades_count=1)],
+        profitable_windows=0,
+        total_profit=-2.0,
+        average_win_rate=0.0,
+        average_profit_factor=0.0,
+    )
+
+    decision = gate._decision(
+        losing_report,
+        candles_checked=500,
+        risk_settings=risk_settings(),
+        learning_probe=True,
+    )
+
+    assert decision.allowed is False
+    assert decision.risk_multiplier == 0.0

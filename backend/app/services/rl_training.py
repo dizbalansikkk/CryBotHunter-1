@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import Callable
 
 import numpy as np
@@ -44,13 +46,28 @@ class RlTrainingService:
         await self.history.exchange.close()
 
     async def needs_refresh(self, db: AsyncSession, symbol: str, timeframe: str) -> bool:
-        active = await self.active_for(db, symbol, timeframe)
-        if not active or not active.created_at:
+        latest = await self.latest_for(db, symbol, timeframe)
+        if not latest or not latest.created_at:
             return True
-        created_at = active.created_at
+        created_at = latest.created_at
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - created_at >= timedelta(hours=max(self.settings.rl_refresh_hours, 1.0))
+        retry_hours = (
+            self.settings.rl_rejected_retry_hours
+            if latest.status == "REJECTED"
+            else self.settings.rl_refresh_hours
+        )
+        return datetime.now(timezone.utc) - created_at >= timedelta(hours=max(float(retry_hours), 1.0))
+
+    async def latest_for(self, db: AsyncSession, symbol: str, timeframe: str) -> RlModel | None:
+        return (
+            await db.execute(
+                select(RlModel)
+                .where(RlModel.symbol == symbol, RlModel.timeframe == timeframe)
+                .order_by(RlModel.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
 
     async def active_for(self, db: AsyncSession, symbol: str, timeframe: str) -> RlModel | None:
         return (
@@ -77,42 +94,14 @@ class RlTrainingService:
 
         frame = build_feature_frame(candles)
         train_frame, validation_frame = self._split(frame)
-        check_env(self._environment(train_frame), warn=True)
-
-        candidates: list[tuple[float, PPO, dict]] = []
-        for seed in self.settings.rl_training_seeds:
-            self._raise_if_stopping()
-            model = PPO(
-                "MlpPolicy",
-                self._environment(train_frame),
-                learning_rate=3e-4,
-                n_steps=512,
-                batch_size=64,
-                gamma=0.995,
-                gae_lambda=0.95,
-                ent_coef=0.005,
-                policy_kwargs={"net_arch": [64, 64]},
-                seed=seed,
-                device="cpu",
-                verbose=0,
-            )
-            model.learn(
-                total_timesteps=max(self.settings.rl_training_timesteps, 1_000),
-                progress_bar=False,
-                callback=ShutdownCallback(self.stop_requested),
-            )
-            self._raise_if_stopping()
-            metrics = self._evaluate(model, validation_frame)
-            metrics["seed"] = seed
-            score = (
-                float(metrics["return_percent"])
-                - float(metrics["max_drawdown_percent"]) * 0.5
-                + min(float(metrics["profit_factor"]), 5.0)
-            )
-            candidates.append((score, model, metrics))
-
-        _, best_model, metrics = max(candidates, key=lambda item: item[0])
-        metrics["buy_hold_return_percent"] = self._buy_hold_return(validation_frame)
+        # Stable Baselines3/PyTorch are CPU-bound and synchronous. Keeping this
+        # work off the asyncio event loop lets the heartbeat, shutdown handling,
+        # and other database work continue while a model is learning.
+        best_model, metrics = await asyncio.to_thread(
+            self._train_candidates,
+            train_frame,
+            validation_frame,
+        )
         metrics["market_data_source"] = "ccxt"
         metrics["passed"] = self._passes_promotion(metrics)
         metrics["promotion_reason"] = self._promotion_reason(metrics)
@@ -144,6 +133,68 @@ class RlTrainingService:
         await db.commit()
         await db.refresh(record)
         return record
+
+    def _train_candidates(self, train_frame, validation_frame) -> tuple[PPO, dict]:
+        started = perf_counter()
+        check_env(self._environment(train_frame), warn=True)
+        candidates: list[tuple[float, PPO, dict]] = []
+        candidate_summaries: list[dict] = []
+        for seed in self.settings.rl_training_seeds:
+            self._raise_if_stopping()
+            model = PPO(
+                "MlpPolicy",
+                self._environment(train_frame),
+                learning_rate=3e-4,
+                n_steps=512,
+                batch_size=64,
+                gamma=0.995,
+                gae_lambda=0.95,
+                ent_coef=0.005,
+                policy_kwargs={"net_arch": [64, 64]},
+                seed=seed,
+                device="cpu",
+                verbose=0,
+            )
+            model.learn(
+                total_timesteps=max(self.settings.rl_training_timesteps, 1_000),
+                progress_bar=False,
+                callback=ShutdownCallback(self.stop_requested),
+            )
+            self._raise_if_stopping()
+            candidate_metrics = self._evaluate(model, validation_frame)
+            candidate_metrics["seed"] = seed
+            score = (
+                float(candidate_metrics["return_percent"])
+                - float(candidate_metrics["max_drawdown_percent"]) * 0.5
+                + min(float(candidate_metrics["profit_factor"]), 5.0)
+            )
+            candidate_summaries.append(
+                {
+                    "seed": int(seed),
+                    "score": round(float(score), 4),
+                    "return_percent": float(candidate_metrics["return_percent"]),
+                    "max_drawdown_percent": float(candidate_metrics["max_drawdown_percent"]),
+                    "profit_factor": float(candidate_metrics["profit_factor"]),
+                    "trades": int(candidate_metrics["trades"]),
+                }
+            )
+            candidates.append((score, model, candidate_metrics))
+
+        selected_score, best_model, selected_metrics = max(candidates, key=lambda item: item[0])
+        metrics = dict(selected_metrics)
+        buy_hold_return = self._buy_hold_return(validation_frame)
+        metrics.update(
+            {
+                "buy_hold_return_percent": buy_hold_return,
+                "excess_return_percent": round(float(metrics["return_percent"]) - buy_hold_return, 4),
+                "selection_score": round(float(selected_score), 4),
+                "training_seconds": round(perf_counter() - started, 2),
+                "timesteps_per_seed": max(int(self.settings.rl_training_timesteps), 1_000),
+                "seeds_evaluated": len(candidate_summaries),
+                "candidates": candidate_summaries,
+            }
+        )
+        return best_model, metrics
 
     def _raise_if_stopping(self) -> None:
         if self.stop_requested():

@@ -348,6 +348,17 @@ button {
   @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
 }
 
+.analytics-grid {
+  @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
+}
+
+.agent-symbol-select {
+  @apply h-10 rounded-md border px-3 text-sm font-bold;
+  border-color: rgba(125, 211, 252, 0.34);
+  background: rgba(4, 20, 52, 0.98);
+  color: var(--text);
+}
+
 .mini-grid {
   @apply grid gap-3 sm:grid-cols-2;
 }
@@ -446,6 +457,61 @@ button {
 
 .agent-card-body {
   @apply space-y-4 p-4;
+}
+
+.learning-progress-body {
+  @apply space-y-4 p-4;
+}
+
+.learning-progress-hero {
+  @apply rounded-md border p-4;
+  border-color: rgba(84, 232, 255, 0.24);
+  background: linear-gradient(135deg, rgba(54, 242, 162, 0.1), rgba(84, 232, 255, 0.08));
+}
+
+.learning-progress-hero > div:first-child {
+  @apply flex items-end justify-between gap-4;
+}
+
+.learning-progress-hero strong {
+  @apply text-3xl font-black;
+  color: var(--mint);
+}
+
+.learning-progress-track {
+  @apply mt-3 h-2 overflow-hidden rounded-full;
+  background: rgba(139, 167, 187, 0.18);
+}
+
+.learning-progress-track span {
+  @apply block h-full rounded-full transition-all;
+  background: linear-gradient(90deg, var(--mint), var(--cyan), var(--coin));
+}
+
+.learning-milestones {
+  @apply grid gap-3 md:grid-cols-2;
+}
+
+.learning-milestone {
+  @apply rounded-md border p-4;
+  border-color: var(--line);
+  background: rgba(4, 25, 63, 0.64);
+}
+
+.learning-milestone > div:first-child {
+  @apply flex items-center justify-between gap-4 text-sm;
+  color: var(--muted);
+}
+
+.learning-milestone strong {
+  color: var(--text);
+}
+
+.learning-guard-note {
+  @apply rounded-md border px-4 py-3 text-sm;
+  border-color: rgba(255, 209, 102, 0.25);
+  background: rgba(255, 209, 102, 0.08);
+  color: #dce9f1;
 }
 
 .table-title {

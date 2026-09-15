@@ -1,10 +1,12 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from app.services.telegram_daily import DailyReportSnapshot
 from app.services.telegram_bot import TelegramNotifier, TelegramPollingBot
 
 
@@ -81,7 +83,7 @@ async def test_polling_conflict_log_does_not_expose_bot_token(monkeypatch, caplo
         async def stop(self):
             return None
 
-    async def maintenance():
+    async def maintenance(_session_factory):
         return None
 
     bot.heartbeat = Heartbeat()
@@ -155,3 +157,61 @@ async def test_outbox_retry_does_not_duplicate_already_delivered_text():
     assert sent == {"text": 1, "photo": 2}
     assert notifier.outbox.failed == 1
     assert notifier.outbox.delivered == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_report_is_queued_once_with_card_and_dedupe_key():
+    now = datetime(2026, 7, 21, 18, tzinfo=timezone.utc)
+    snapshot = DailyReportSnapshot(
+        generated_at=now,
+        paper_trading=True,
+        pnl_day=1.5,
+        pnl_week=2.0,
+        total_pnl=3.0,
+        open_pnl=1.5,
+        win_rate=50,
+        trades_count=2,
+        closed_today=0,
+        positions=(),
+        learning_rules=1,
+        learning_observations=2,
+        active_rl_models=0,
+        healthy_workers=3,
+        total_workers=3,
+        unhealthy_workers=(),
+        pending_notifications=0,
+        failed_notifications=0,
+    )
+
+    class Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Reports:
+        async def snapshot(self, _db, *, now):
+            return snapshot
+
+    bot = TelegramPollingBot()
+    bot.settings = SimpleNamespace(
+        telegram_daily_report_enabled=True,
+        telegram_daily_report_hour_utc=18,
+        telegram_daily_report_minute_utc=0,
+    )
+    bot.daily_reports = Reports()
+    broadcasts = []
+
+    async def broadcast(text, **kwargs):
+        broadcasts.append((text, kwargs))
+        return 1
+
+    bot.notifier.broadcast = broadcast
+
+    await bot._send_daily_report_if_due(Session, now=now)
+    await bot._send_daily_report_if_due(Session, now=now)
+
+    assert len(broadcasts) == 1
+    assert broadcasts[0][1]["dedupe_key"] == "daily-report:2026-07-21"
+    assert broadcasts[0][1]["photo"].startswith(b"\xff\xd8")

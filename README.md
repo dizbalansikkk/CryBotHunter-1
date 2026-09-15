@@ -70,9 +70,14 @@ TELEGRAM_CYCLE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORT_INTERVAL_MINUTES=15
 TELEGRAM_OUTBOX_ENABLED=true
 TELEGRAM_OUTBOX_RETRY_LIMIT=8
+TELEGRAM_DAILY_REPORT_ENABLED=true
+TELEGRAM_DAILY_REPORT_HOUR_UTC=18
+TELEGRAM_DAILY_REPORT_MINUTE_UTC=0
 WORKER_HEARTBEAT_ENABLED=true
 WORKER_HEARTBEAT_INTERVAL_SECONDS=30
 WORKER_HEARTBEAT_STALE_SECONDS=180
+WORKER_HEARTBEAT_STARTUP_GRACE_SECONDS=600
+WORKER_HEARTBEAT_LONG_TASK_GRACE_SECONDS=900
 TRADER_LOOP_SECONDS=60
 LLM_PROVIDER=none
 OPENAI_API_KEY=
@@ -81,7 +86,9 @@ AI_COMMITTEE_ENABLED=true
 AI_COMMITTEE_MIN_CONSENSUS=0.66
 MAX_GROSS_EXPOSURE_PERCENT=300
 MAX_SYMBOL_EXPOSURE_PERCENT=100
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT
+CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h
 CANDLE_INGEST_LIMIT=500
 CANDLE_INGEST_LOOP_SECONDS=300
@@ -130,8 +137,13 @@ TELEGRAM_CYCLE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORT_INTERVAL_MINUTES=15
 PAPER_EXPLORATION_ENABLED=true
 PAPER_EXPLORATION_MIN_SCORE=65
-PAPER_EXPLORATION_RISK_PERCENT=0.25
+PAPER_EXPLORATION_RISK_PERCENT=0.15
+PAPER_EXPLORATION_MAX_RISK_PERCENT=0.15
 PAPER_EXPLORATION_MAX_POSITIONS=2
+PAPER_EXPLORATION_RECOVERY_SLOTS=2
+PAPER_EXPLORATION_MAX_PER_CYCLE=1
+PAPER_EXPLORATION_MIN_DIRECTIONAL_VOTES=5
+PAPER_EXPLORATION_MIN_VOTE_MARGIN=2
 PAPER_EXPLORATION_COOLDOWN_MINUTES=240
 SAFETY_CHECK_ENABLED=true
 SAFETY_CHECK_SYMBOL=BTC/USDT
@@ -155,7 +167,9 @@ JWT_SECRET=the-same-secret-as-backend
 ENCRYPTION_KEY=the-same-fernet-key-as-backend
 PAPER_TRADING=true
 MARKET_DATA_MODE=ccxt
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT
+CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h,15m
 CANDLE_INGEST_LIMIT=500
 CANDLE_INGEST_LOOP_SECONDS=300
@@ -180,7 +194,7 @@ STRATEGY_OPTIMIZER_TOP_N=5
 
 `PAPER_TRADING=true` controls order execution only. Paper orders and balances remain virtual while `MARKET_DATA_MODE=ccxt` reads real public exchange prices and candles. The legacy value `MARKET_DATA_MODE=paper` is treated as the same real public feed for backward compatibility. Synthetic data is available only with the explicit value `MARKET_DATA_MODE=synthetic` and must never be used by the RL trainer.
 
-`PAPER_EXPLORATION_ENABLED=true` lets the trader open small, explicitly labelled test positions when the strict strategy returns `WAIT` but the setup score is above `PAPER_EXPLORATION_MIN_SCORE`. Exploration is impossible outside paper mode, keeps liquidity, cooldown, exposure, daily-loss, and drawdown protections, caps risk with `PAPER_EXPLORATION_RISK_PERCENT`, limits simultaneous exploratory positions, and pauses the same symbol for the configured cooldown after an entry. It exists to generate real-price paper outcomes for the learning memory without weakening live-trading gates.
+`PAPER_EXPLORATION_ENABLED=true` enables a separate paper-only learning lane when the strict strategy returns `WAIT`. A candidate must clear the score threshold, a decisive indicator vote, market-quality, walk-forward, RL, cooldown, exposure, daily-loss, and drawdown gates. The lane can keep learning while the regular performance guard is cooling down, but it has independent recovery slots, opens at most one new position per cycle, and is hard-capped by `PAPER_EXPLORATION_MAX_RISK_PERCENT` even when an older deployment variable requests more risk. Every candidate and final allow/block result is recorded as `PaperLearningScout` and `PaperLearningRiskGate` agent activity. Exploratory outcomes update learning memory but do not distort the regular-strategy performance guard.
 
 For exchange testnet execution, set `PAPER_TRADING=false`, `LIVE_TRADING_ENABLED=true`, and keep `EXCHANGE_SANDBOX_ENABLED=true`. Keep `ALLOW_LIVE_TRADING_WITHOUT_SANDBOX=false` until live execution is reviewed, tested, and deliberately approved.
 
@@ -206,7 +220,9 @@ PAPER_TRADING=true
 LIVE_TRADING_ENABLED=false
 MARKET_DATA_MODE=ccxt
 DEFAULT_EXCHANGE=binance
-CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT
+CANDLE_INGEST_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_SYMBOLS=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT
+MARKET_SCAN_CONCURRENCY=3
 CANDLE_INGEST_TIMEFRAMES=1h
 RL_TRAINER_ENABLED=true
 RL_GATE_ENABLED=true
@@ -215,6 +231,7 @@ RL_TRAINING_LIMIT=5000
 RL_MIN_TRAINING_CANDLES=2000
 RL_TRAINING_SEEDS=7,29
 RL_REFRESH_HOURS=24
+RL_REJECTED_RETRY_HOURS=6
 RL_PREDICTION_LOOP_SECONDS=300
 SAFETY_CHECK_ENABLED=true
 SAFETY_CHECK_SYMBOL=BTC/USDT
@@ -232,6 +249,8 @@ RL_WAIT_RISK_MULTIPLIER=0.5
 ```
 
 The RL service needs no Binance API key because OHLCV is public. Set its Railway Config File to `/backend/railway.rl.toml`; this selects `Dockerfile.rl`. Deploy it in the same Railway region that can reach Binance. Stable Baselines3 and CPU-only PyTorch are installed only by `Dockerfile.rl`; the web, trader, and Telegram images remain smaller.
+
+PPO training runs outside the asyncio event loop, so `rl-worker` keeps publishing heartbeat updates while PyTorch is busy. Worker status reports expose the current pair, progress, and cycle totals; rejected candidates wait `RL_REJECTED_RETRY_HOURS` before training again instead of repeating on nearly identical candles every prediction cycle.
 
 Only the `backend` and `frontend` services need public domains. Worker services should remain private. The web process runs Alembic migrations by default; background workers skip migrations to avoid concurrent schema upgrades. Override this only with an explicit `RUN_MIGRATIONS=true`.
 
@@ -316,6 +335,8 @@ Supported commands:
 - Persists Telegram notifications in a deduplicated outbox, retries transient delivery failures with exponential backoff, and resumes partially delivered text/photo reports without duplicating the successful part.
 - Adds the latest 48 real Binance 1h candles, entry, current price, stop loss, and take profit to each position card when market data is available.
 - Records worker heartbeats and sends one alert when a worker becomes stale plus a recovery notice when it resumes; `/status` shows current worker and outbox health.
+- Provides Telegram `/health` diagnostics for PostgreSQL, Redis, Binance market data, the notification queue, and every worker heartbeat.
+- Sends one deduplicated daily Telegram portfolio report with a generated JPEG card (18:00 UTC by default), including PnL, positions, learning, workers, and delivery-queue health.
 - Returns an execution report for every manual scan: scanned, opened, skipped, and decision reasons.
 - Manages open positions through `/api/v1/trading/tick`: current price, floating PnL, stop loss, take profit, trailing stop, and close reasons.
 - Stores every execution attempt in `orders`, including status, filled amount, average price, fee, and paper slippage.
@@ -330,6 +351,7 @@ Supported commands:
 - Provides panic/resume controls through API and Telegram.
 - Provides deep health checks through `/health/deep`.
 - Blocks new entries through a performance guard when recent win rate, loss streak, or total profit falls below thresholds.
+- Automatically leaves a performance-guard deadlock after a cooldown by allowing one reduced-risk recovery position; a new loss starts the cooldown again.
 - Provides system status, sample backtest metrics, and Telegram test notification API.
 - Persists positions, trades, signals, settings, and logs in PostgreSQL and mirrors completed trades into asynchronous SQLite memory.
 - Exposes dashboard, market, logs, settings, positions, and trading endpoints.

@@ -105,6 +105,22 @@ def test_learning_block_requires_repeated_specific_losing_setup():
     assert service._has_block_evidence([(repeated_setup_loss, 3.0, "repeated")])
 
 
+def test_learning_insights_explain_protective_and_favorable_patterns():
+    service = LearningService()
+    losing = learning_rule("setup_signature", penalty=3.0, observations=4, wins=0, losses=4)
+    winning = learning_rule("trend_stack", penalty=0.0, observations=4, wins=3, losses=1)
+    winning.total_profit = 18
+
+    result = service.build_insights([losing, winning], learned_from_trades=4)
+
+    assert result.learned_from_trades == 4
+    assert result.strong_patterns == 2
+    assert result.protective_patterns == 1
+    assert result.favorable_patterns == 1
+    assert result.insights[0].impact == "AVOID"
+    assert any(item.impact == "PREFER" for item in result.insights)
+
+
 def learning_rule(
     feature_key: str,
     penalty: float = 1.0,

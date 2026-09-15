@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import current_user
 from app.db.session import get_db
 from app.models.entities import AgentDecision, User
-from app.schemas.dto import AgentAnalysisOut, AgentDecisionOut
+from app.schemas.dto import AgentActivityOut, AgentAnalysisOut, AgentDecisionOut
+from app.services.agent_activity import AgentActivityService
 from app.services.agents import AgentOrchestrator
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -37,6 +38,24 @@ async def recent_decisions(
             confidence=row.confidence,
             rationale=row.rationale,
             context=row.context or {},
+            created_at=row.created_at,
         )
         for row in rows
     ]
+
+
+@router.get("/activity", response_model=AgentActivityOut)
+async def agent_activity(
+    _: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = 1000,
+) -> AgentActivityOut:
+    bounded_limit = max(50, min(limit, 5000))
+    rows = list(
+        (
+            await db.execute(
+                select(AgentDecision).order_by(AgentDecision.created_at.desc()).limit(bounded_limit)
+            )
+        ).scalars().all()
+    )
+    return AgentActivityService().summarize(rows)

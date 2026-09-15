@@ -3,11 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user
 from app.db.session import get_db
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.models.entities import LearningRule, RlModel, User
-from app.schemas.dto import LearningRuleOut, LearningSummaryOut, RlModelOut, StrategyOptimizationOut
+from app.models.entities import LearningRule, Position, RlModel, User
+from app.schemas.dto import LearningInsightsOut, LearningProgressOut, LearningRuleOut, LearningSummaryOut, RlModelOut, StrategyOptimizationOut
 from app.services.learning import LearningService
+from app.services.learning_progress import LearningProgressService
 from app.services.optimizer import StrategyOptimizerService
 
 router = APIRouter(prefix="/strategy-lab", tags=["strategy-lab"])
@@ -76,3 +77,28 @@ async def learning_summary(_: User = Depends(current_user), db: AsyncSession = D
         total_losses=sum(rule.losses for rule in rules),
         total_wins=sum(rule.wins for rule in rules),
     )
+
+
+@router.get("/learning-insights", response_model=LearningInsightsOut)
+async def learning_insights(
+    _: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = 12,
+) -> LearningInsightsOut:
+    rules = list((await db.execute(select(LearningRule))).scalars().all())
+    learned_from_trades = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(Position).where(Position.status == "CLOSED")
+            )
+        ).scalar_one()
+    )
+    return LearningService().build_insights(rules, learned_from_trades, limit=max(1, min(limit, 50)))
+
+
+@router.get("/learning-progress", response_model=LearningProgressOut)
+async def learning_progress(
+    _: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LearningProgressOut:
+    return await LearningProgressService().build(db)

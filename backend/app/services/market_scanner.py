@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 from hashlib import sha256
 from random import Random
@@ -13,6 +14,9 @@ from app.services.exchange import ExchangeClient
 from app.services.market_regime import MarketRegimeDetector
 
 
+logger = logging.getLogger(__name__)
+
+
 class MarketScanner:
     def __init__(self, exchange: ExchangeClient | None = None) -> None:
         self.regime_detector = MarketRegimeDetector()
@@ -20,49 +24,60 @@ class MarketScanner:
         self.context_manager = ContextManager()
 
     async def scan(self, symbols: list[str] | None = None) -> list[MarketCoin]:
-        symbols = symbols or ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
-        if get_settings().uses_live_market_data:
+        settings = get_settings()
+        symbols = symbols or settings.market_scan_symbols
+        if settings.uses_live_market_data:
             return await self._scan_ccxt(symbols)
         rows = [self._synthetic_row(symbol) for symbol in symbols]
         return [self._coin_from_row(row) for row in rows]
 
     async def _scan_ccxt(self, symbols: list[str]) -> list[MarketCoin]:
         tickers = await self.exchange.fetch_tickers(symbols)
-        coins: list[MarketCoin] = []
-        for symbol in symbols:
-            candles = await self.exchange.fetch_ohlcv(symbol, timeframe="1h", limit=250)
-            if len(candles) < 200:
-                continue
-            frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
-            market_context, indicator_frame = await asyncio.gather(
-                self.context_manager.get_market_context(frame),
-                asyncio.to_thread(self.calculate_indicators, frame.copy(deep=True)),
-            )
-            indicators = indicator_frame.iloc[-1]
-            ticker = tickers.get(symbol, {})
-            bid = self._optional_float(ticker.get("bid"))
-            ask = self._optional_float(ticker.get("ask"))
-            row = {
-                "symbol": symbol,
-                "price": float(ticker.get("last") or indicators["close"]),
-                "volume_24h": float(ticker.get("quoteVolume") or frame.tail(24)["volume"].sum()),
-                "price_change_percent": float(ticker.get("percentage") or 0),
-                "atr": market_context.atr,
-                "rsi": market_context.rsi,
-                "sma": market_context.sma,
-                "market_context": market_context.as_dict(),
-                "ema20": float(indicators["ema20"]),
-                "ema50": float(indicators["ema50"]),
-                "ema200": float(indicators["ema200"]),
-                "macd": float(indicators["macd"]),
-                "funding_rate": 0.0,
-                "open_interest": 0.0,
-                "bid": bid,
-                "ask": ask,
-                "spread_bps": self._spread_bps(bid, ask),
-            }
-            coins.append(self._coin_from_row(row))
-        return coins
+        semaphore = asyncio.Semaphore(max(int(getattr(get_settings(), "market_scan_concurrency", 3)), 1))
+
+        async def scan_symbol(symbol: str) -> MarketCoin | None:
+            async with semaphore:
+                try:
+                    return await self._scan_ccxt_symbol(symbol, tickers.get(symbol, {}))
+                except Exception as exc:
+                    logger.warning("Market scan skipped symbol=%s error=%s", symbol, type(exc).__name__)
+                    return None
+
+        results = await asyncio.gather(*(scan_symbol(symbol) for symbol in symbols))
+        return [coin for coin in results if coin is not None]
+
+    async def _scan_ccxt_symbol(self, symbol: str, ticker: dict[str, Any]) -> MarketCoin | None:
+        candles = await self.exchange.fetch_ohlcv(symbol, timeframe="1h", limit=250)
+        if len(candles) < 200:
+            return None
+        frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        market_context, indicator_frame = await asyncio.gather(
+            self.context_manager.get_market_context(frame),
+            asyncio.to_thread(self.calculate_indicators, frame.copy(deep=True)),
+        )
+        indicators = indicator_frame.iloc[-1]
+        bid = self._optional_float(ticker.get("bid"))
+        ask = self._optional_float(ticker.get("ask"))
+        row = {
+            "symbol": symbol,
+            "price": float(ticker.get("last") or indicators["close"]),
+            "volume_24h": float(ticker.get("quoteVolume") or frame.tail(24)["volume"].sum()),
+            "price_change_percent": float(ticker.get("percentage") or 0),
+            "atr": market_context.atr,
+            "rsi": market_context.rsi,
+            "sma": market_context.sma,
+            "market_context": market_context.as_dict(),
+            "ema20": float(indicators["ema20"]),
+            "ema50": float(indicators["ema50"]),
+            "ema200": float(indicators["ema200"]),
+            "macd": float(indicators["macd"]),
+            "funding_rate": 0.0,
+            "open_interest": 0.0,
+            "bid": bid,
+            "ask": ask,
+            "spread_bps": self._spread_bps(bid, ask),
+        }
+        return self._coin_from_row(row)
 
     def _coin_from_row(self, row: dict[str, Any]) -> MarketCoin:
         if not row.get("market_context"):

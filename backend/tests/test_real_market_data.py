@@ -31,6 +31,13 @@ def test_rl_worker_trains_by_default(monkeypatch):
     assert Settings(_env_file=None).rl_trainer_enabled is True
 
 
+def test_default_market_universe_has_twelve_liquid_pairs():
+    settings = Settings(_env_file=None)
+
+    assert len(settings.market_scan_symbols) == 12
+    assert {"BTC/USDT", "ETH/USDT", "LINK/USDT", "TRX/USDT"}.issubset(settings.market_scan_symbols)
+
+
 def test_strong_spot_setup_can_reach_tradeable_rating_without_open_interest():
     scanner = MarketScanner()
     coin = scanner._coin_from_row(

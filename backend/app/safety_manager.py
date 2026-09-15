@@ -92,6 +92,10 @@ class SafetyCheckError(RuntimeError):
     pass
 
 
+class SafetyNetworkError(SafetyCheckError):
+    """A transient exchange connectivity failure after all retries."""
+
+
 class ShutdownController:
     def __init__(self) -> None:
         self._event = asyncio.Event()
@@ -180,8 +184,24 @@ class SafetyManager:
         return report
 
     async def run_or_exit(self, credentials: SafetyCredentials | None = None) -> SafetyReport:
+        config: SafetyConfiguration | None = None
         try:
+            config = self.load_environment(credentials)
             return await self.run(credentials)
+        except SafetyNetworkError as exc:
+            if config is not None and config.paper_trading and not config.validate_private_api:
+                logger.error(
+                    "Paper pre-flight degraded: %s; starting worker so runtime cycles can retry safely",
+                    self._safe_error(exc),
+                )
+                return SafetyReport(
+                    ok=False,
+                    exchange=config.exchange,
+                    process=config.process,
+                    mode="PAPER",
+                )
+            logger.critical("Pre-flight failed: %s", self._safe_error(exc))
+            sys.exit(1)
         except (SafetyCheckError, ValidationError, ValueError) as exc:
             logger.critical("Pre-flight failed: %s", self._safe_error(exc))
             sys.exit(1)
@@ -224,7 +244,7 @@ class SafetyManager:
                 return await asyncio.to_thread(self._probe_sync, config)
             except (ccxt.NetworkError, TimeoutError, ConnectionError) as exc:
                 if attempt >= config.retry_attempts:
-                    raise SafetyCheckError(
+                    raise SafetyNetworkError(
                         f"exchange network check exhausted {config.retry_attempts} attempts: {type(exc).__name__}"
                     ) from exc
                 logger.warning(

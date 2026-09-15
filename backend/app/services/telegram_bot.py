@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 import logging
 
@@ -18,17 +18,24 @@ from app.models.entities import (
 )
 from app.services.control import TradingControlService
 from app.services.exchange import ExchangeClient
-from app.services.heartbeat import HeartbeatReporter, WorkerHeartbeatService
+from app.services.heartbeat import HeartbeatReporter, WorkerHeartbeatService, worker_is_healthy
 from app.services.performance_guard import PerformanceGuardService
 from app.services.pnl import PnlMetricsService
 from app.services.reconciliation import OrderReconciliationService
+from app.services.system_health import SystemHealthService
+from app.services.telegram_cards import safe_render_daily_report_card
+from app.services.telegram_daily import TelegramDailyReportService, daily_report_due
 from app.services.telegram_outbox import TelegramOutboxService
 from app.services.telegram_reports import (
+    format_daily_report,
     format_position_details,
+    format_system_health,
     format_trade_closed,
     format_worker_heartbeat_event,
     human_reason,
     split_telegram_message,
+    worker_detail_summary,
+    worker_status_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,6 +196,7 @@ class TelegramCommandService:
                 "CryBotHunter работает.\n\n"
                 "Команды:\n"
                 "/status — режим и состояние системы\n"
+                "/health — PostgreSQL, Redis, Binance, очередь и воркеры\n"
                 "/report — полный текущий отчёт\n"
                 "/positions — открытые позиции\n"
                 "/trades — последние закрытые сделки\n"
@@ -243,13 +251,21 @@ class TelegramCommandService:
                 f"└ Telegram outbox: <code>{int(pending_notifications)} в очереди</code>"
             )
             if heartbeats:
+                heartbeat_now = datetime.now(timezone.utc)
+                stale_seconds = max(int(settings.worker_heartbeat_stale_seconds), 60)
                 report += "\n\n<b>Worker heartbeat</b>\n" + "\n".join(
-                    f"{'🟢' if item.status in {'OK', 'PAUSED', 'DISABLED'} else '🟡'} "
-                    f"{escape(item.worker_name)} · <code>{escape(item.status)}</code> · "
-                    f"{_heartbeat_age(item.last_seen_at)}"
+                    _heartbeat_status_line(
+                        item,
+                        settings=settings,
+                        now=heartbeat_now,
+                        stale_seconds=stale_seconds,
+                    )
                     for item in heartbeats
                 )
             return report
+        if command == "/health":
+            snapshot = await SystemHealthService().snapshot(db)
+            return format_system_health(snapshot)
         if command == "/balance":
             balance = await ExchangeClient().get_balance()
             return "Баланс:\n" + "\n".join([f"{asset}: {amount:.2f}" for asset, amount in balance.items()])
@@ -266,6 +282,16 @@ class TelegramCommandService:
             )
         if command == "/guard":
             report = await PerformanceGuardService().evaluate(db)
+            recovery = (
+                f"\nРежим восстановления: да, риск {report.risk_multiplier:.2f}x"
+                if report.recovery_mode
+                else ""
+            )
+            retry = (
+                f"\nСледующая проба: {report.retry_at:%d.%m.%Y %H:%M} UTC"
+                if report.retry_at is not None
+                else ""
+            )
             return (
                 f"Защитный фильтр:\n"
                 f"Новые входы разрешены: {'да' if report.allowed else 'нет'}\n"
@@ -274,6 +300,7 @@ class TelegramCommandService:
                 f"Доля прибыльных: {report.win_rate:.2f}%\n"
                 f"Серия убытков: {report.loss_streak}\n"
                 f"Суммарный результат: {report.total_profit:+.2f} USDT"
+                f"{recovery}{retry}"
             )
         if command == "/positions":
             positions = (
@@ -376,8 +403,11 @@ class TelegramPollingBot:
         self.commands = TelegramCommandService()
         self.heartbeat = HeartbeatReporter("telegram")
         self.heartbeat_service = WorkerHeartbeatService()
+        self.daily_reports = TelegramDailyReportService()
         self.offset = 0
         self.last_outbox_cleanup_at: datetime | None = None
+        self.last_daily_report_date: date | None = None
+        self.last_daily_report_attempt_at: datetime | None = None
 
     async def run(self, session_factory) -> None:
         if not self.notifier.enabled:
@@ -387,7 +417,7 @@ class TelegramPollingBot:
         try:
             while True:
                 try:
-                    await self._maintenance()
+                    await self._maintenance(session_factory)
                     updates = await self._get_updates()
                     for update in updates:
                         self.offset = max(self.offset, update["update_id"] + 1)
@@ -412,7 +442,7 @@ class TelegramPollingBot:
         finally:
             await self.heartbeat.stop()
 
-    async def _maintenance(self) -> None:
+    async def _maintenance(self, session_factory) -> None:
         try:
             await self.notifier.flush_outbox()
             now = datetime.now(timezone.utc)
@@ -425,7 +455,7 @@ class TelegramPollingBot:
             events = await self.heartbeat_service.watchdog_events()
         except Exception as exc:
             logger.warning("Worker heartbeat watchdog failed error=%s", type(exc).__name__)
-            return
+            events = []
         for event in events:
             await self.notifier.broadcast(
                 format_worker_heartbeat_event(
@@ -434,12 +464,59 @@ class TelegramPollingBot:
                     status=event.status,
                     age_seconds=event.age_seconds,
                     detail=event.detail,
+                    stale_after_seconds=event.stale_after_seconds,
                 ),
                 dedupe_key=(
                     f"heartbeat:{event.kind}:{event.worker_name}:"
                     f"{event.last_seen_at.isoformat()}"
                 ),
             )
+        await self._send_daily_report_if_due(session_factory)
+
+    async def _send_daily_report_if_due(
+        self,
+        session_factory,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        if not self.settings.telegram_daily_report_enabled or session_factory is None:
+            return
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        else:
+            current = current.astimezone(timezone.utc)
+        if not daily_report_due(
+            now=current,
+            last_report_date=self.last_daily_report_date,
+            hour_utc=self.settings.telegram_daily_report_hour_utc,
+            minute_utc=self.settings.telegram_daily_report_minute_utc,
+        ):
+            return
+        if (
+            self.last_daily_report_attempt_at is not None
+            and current - self.last_daily_report_attempt_at < timedelta(minutes=15)
+        ):
+            return
+        self.last_daily_report_attempt_at = current
+        try:
+            async with session_factory() as db:
+                snapshot = await self.daily_reports.snapshot(db, now=current)
+            report = format_daily_report(snapshot)
+            await self.notifier.broadcast(
+                report,
+                photo=safe_render_daily_report_card(snapshot),
+                photo_filename=f"daily-report-{current:%Y-%m-%d}.jpg",
+                photo_caption=(
+                    f"<b>📊 CRYBOTHUNTER · ИТОГИ {current:%d.%m.%Y}</b>\n"
+                    f"PnL за день: <b>{snapshot.pnl_day:+.2f} USDT</b>"
+                ),
+                dedupe_key=f"daily-report:{current:%Y-%m-%d}",
+            )
+            self.last_daily_report_date = current.date()
+            logger.info("Telegram daily report queued report_date=%s", current.date())
+        except Exception as exc:
+            logger.warning("Telegram daily report failed error=%s", type(exc).__name__)
 
     async def _get_updates(self) -> list[dict]:
         async with httpx.AsyncClient(timeout=35) as client:
@@ -479,3 +556,27 @@ def _heartbeat_age(value: datetime) -> str:
     if seconds < 60:
         return f"{seconds} сек назад"
     return f"{seconds // 60} мин назад"
+
+
+def _aware_heartbeat(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _heartbeat_status_line(item, *, settings, now: datetime, stale_seconds: int) -> str:
+    detail = getattr(item, "detail", None) or {}
+    age_seconds = max(int((now - _aware_heartbeat(item.last_seen_at)).total_seconds()), 0)
+    healthy = worker_is_healthy(
+        status=item.status,
+        age_seconds=age_seconds,
+        base_seconds=stale_seconds,
+        detail=detail,
+        startup_grace_seconds=getattr(settings, "worker_heartbeat_startup_grace_seconds", 600),
+        long_task_grace_seconds=getattr(settings, "worker_heartbeat_long_task_grace_seconds", 900),
+    )
+    return (
+        f"{'🟢' if healthy else '🔴'} {escape(item.worker_name)} · "
+        f"<code>{escape(worker_status_label(item.status))}</code> · {_heartbeat_age(item.last_seen_at)}\n"
+        f"   {escape(worker_detail_summary(detail), quote=False)}"
+    )

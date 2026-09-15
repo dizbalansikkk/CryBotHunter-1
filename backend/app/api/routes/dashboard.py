@@ -10,6 +10,7 @@ from app.models.entities import Position, User, UserSettings
 from app.schemas.dto import DashboardOut
 from app.services.exchange import ExchangeClient
 from app.services.pnl import PnlMetricsService
+from app.services.trade_analytics import TradeAnalyticsService
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ async def dashboard(user: User = Depends(current_user), db: AsyncSession = Depen
         balance = 0
     positions = (await db.execute(select(Position).where(Position.status == "OPEN").order_by(Position.entered_at.desc()))).scalars().all()
     pnl = await PnlMetricsService().summary(db)
+    analytics = await TradeAnalyticsService().summary(db)
     return DashboardOut(
         balance=balance,
         pnl_day=pnl.pnl_day,
@@ -32,4 +34,5 @@ async def dashboard(user: User = Depends(current_user), db: AsyncSession = Depen
         win_rate=pnl.win_rate,
         trades_count=pnl.trades_count,
         active_positions=list(positions),
+        analytics=analytics,
     )

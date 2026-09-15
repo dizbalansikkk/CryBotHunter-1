@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import LearningRule, Position
-from app.schemas.dto import MarketCoin
+from app.schemas.dto import LearningInsightOut, LearningInsightsOut, MarketCoin
 
 
 @dataclass
@@ -263,6 +263,71 @@ class LearningService:
         span = max(self.block_threshold - self.warn_threshold, 0.01)
         severity = min(max((penalty - self.warn_threshold) / span, 0.0), 1.0)
         return round(max(self.min_risk_multiplier, 0.75 - severity * (0.75 - self.min_risk_multiplier)), 2)
+
+    def build_insights(
+        self,
+        rules: list[LearningRule],
+        learned_from_trades: int,
+        limit: int = 12,
+    ) -> LearningInsightsOut:
+        insights = [self._insight(rule) for rule in rules if int(rule.observations or 0) > 0]
+        priority = {"AVOID": 4, "CAUTION": 3, "PREFER": 2, "WATCH": 1}
+        insights.sort(
+            key=lambda item: (
+                priority[item.impact],
+                item.effective_penalty if item.impact in {"AVOID", "CAUTION"} else abs(item.total_profit),
+                item.observations,
+            ),
+            reverse=True,
+        )
+        strong = [item for item in insights if item.confidence >= 0.75 and item.observations >= 2]
+        return LearningInsightsOut(
+            learned_from_trades=max(int(learned_from_trades), 0),
+            rules_updated=len(rules),
+            strong_patterns=len(strong),
+            protective_patterns=sum(1 for item in strong if item.impact in {"AVOID", "CAUTION"}),
+            favorable_patterns=sum(1 for item in strong if item.impact == "PREFER"),
+            insights=insights[: max(int(limit), 0)],
+        )
+
+    def _insight(self, rule: LearningRule) -> LearningInsightOut:
+        observations = max(int(rule.observations or 0), 0)
+        wins = max(int(rule.wins or 0), 0)
+        losses = max(int(rule.losses or 0), 0)
+        win_rate = wins / observations * 100 if observations else 0.0
+        confidence = self.rule_confidence(observations, rule.updated_at)
+        risk_level = self.risk_level(rule.penalty, observations, rule.updated_at)
+        effective_penalty = self.effective_penalty(rule, rule.scope)
+        profitable = observations >= 2 and wins > losses and float(rule.total_profit or 0) > 0
+        if risk_level == "BLOCK":
+            impact = "AVOID"
+            explanation = "Повторяющийся убыточный паттерн: новые совпадения блокируются."
+        elif risk_level == "WARN" or effective_penalty >= self.warn_threshold:
+            impact = "CAUTION"
+            explanation = "Похожий вход исторически слабый: бот уменьшает риск."
+        elif profitable:
+            impact = "PREFER"
+            explanation = "Паттерн чаще приносил прибыль и ослабляет старые штрафы для похожих входов."
+        else:
+            impact = "WATCH"
+            explanation = "Данных пока мало: бот наблюдает, но не меняет решение автоматически."
+        return LearningInsightOut(
+            impact=impact,
+            scope=rule.scope,
+            side=rule.side,
+            feature_key=rule.feature_key,
+            feature_value=rule.feature_value,
+            observations=observations,
+            wins=wins,
+            losses=losses,
+            win_rate=round(win_rate, 2),
+            total_profit=round(float(rule.total_profit or 0), 4),
+            effective_penalty=round(effective_penalty, 4),
+            confidence=confidence,
+            risk_level=risk_level,
+            explanation=explanation,
+            last_reason=rule.last_reason,
+        )
 
     def _has_block_evidence(self, matched: list[tuple[LearningRule, float, str]]) -> bool:
         for rule, _penalty, _label in matched:
