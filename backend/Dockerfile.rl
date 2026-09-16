@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 COPY requirements.txt requirements-rl.txt ./
 RUN pip install --no-cache-dir -r requirements-rl.txt
+# Fail the image build early if the RL runtime dependency was not installed.
+RUN python -c "from stable_baselines3 import PPO"
 
 COPY . .
 
