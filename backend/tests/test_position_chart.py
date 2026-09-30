@@ -1,0 +1,85 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.api.routes.positions import position_chart
+from app.models.entities import Candle, Position
+
+
+class _Scalars:
+    def __init__(self, values):
+        self.values = values
+
+    def all(self):
+        return list(self.values)
+
+
+class _Result:
+    def __init__(self, *, position=None, candles=None):
+        self.position = position
+        self.candles = candles or []
+
+    def scalar_one_or_none(self):
+        return self.position
+
+    def scalars(self):
+        return _Scalars(self.candles)
+
+
+class _Db:
+    def __init__(self, position, candles):
+        self.position = position
+        self.candles = candles
+        self.calls = 0
+
+    async def execute(self, _statement):
+        self.calls += 1
+        return _Result(position=self.position) if self.calls == 1 else _Result(candles=self.candles)
+
+
+@pytest.mark.asyncio
+async def test_trade_chart_uses_persisted_candles_and_recorded_trade_levels():
+    entered_at = datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
+    position = Position(
+        id=18,
+        symbol="ETH/USDT",
+        side="LONG",
+        entry_price=2500,
+        current_price=2575,
+        volume=1,
+        stop=2505,
+        take=2600,
+        status="CLOSED",
+        entered_at=entered_at,
+        closed_at=entered_at + timedelta(hours=2),
+        entry_context={
+            "scale_out": {"tp1_price": 2503, "tp2_price": 2535, "tp1_fill_price": 2503.2},
+            "stop_execution": {"actual_price": 2505.4},
+        },
+    )
+    candles = [
+        Candle(
+            symbol="ETH/USDT",
+            timeframe="1h",
+            timestamp=entered_at + timedelta(hours=offset),
+            open=2499 + offset,
+            high=2504 + offset,
+            low=2497 + offset,
+            close=2501 + offset,
+            volume=100,
+            source="ccxt",
+        )
+        for offset in range(3)
+    ]
+
+    chart = await position_chart(18, "1h", None, _Db(position, candles))
+
+    assert chart.symbol == "ETH/USDT"
+    assert len(chart.candles) == 3
+    assert {(level.key, level.price) for level in chart.levels} >= {
+        ("entry", 2500),
+        ("tp1_price", 2503),
+        ("tp1_fill", 2503.2),
+        ("stop_fill", 2505.4),
+    }
+    assert [(marker.key, marker.price) for marker in chart.markers] == [("entry", 2500), ("exit", 2575)]

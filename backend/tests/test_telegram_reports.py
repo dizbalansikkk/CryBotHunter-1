@@ -7,6 +7,7 @@ from app.services.telegram_daily import DailyPosition, DailyReportSnapshot
 from app.services.telegram_reports import (
     format_cycle_report,
     format_daily_report,
+    format_partial_take_profit,
     format_position_details,
     format_system_health,
     format_trade_closed,
@@ -162,6 +163,21 @@ def test_worker_heartbeat_alert_is_readable_and_escaped():
     assert "Порог тревоги" in report
     assert "HTTP &lt;timeout&gt;" in report
     assert report.count("<b>") == report.count("</b>")
+
+
+def test_dynamic_take_report_shows_the_new_stop_and_next_target():
+    report = format_partial_take_profit(
+        position(),
+        closed_volume=0.5,
+        exit_price=106,
+        profit=3,
+        locked_stop=103,
+        next_take=109,
+    )
+
+    assert "ДИНАМИЧЕСКИЙ ТЕЙК-ПРОФИТ" in report
+    assert "Новый SL" in report
+    assert "Следующий TP" in report
 
 
 def test_rl_cycle_detail_exposes_shadow_and_training_queue():

@@ -198,6 +198,8 @@ class PostMortemService:
             "exit_fee": round(exit_fee, 6),
             "entry_slippage_cost": round(entry_slippage_cost, 6),
             "exit_slippage_cost": round(exit_slippage_cost, 6),
+            "entry_slippage": round(self._number(entry.get("slippage")), 8),
+            "exit_slippage": round(self._number(exit_order.slippage), 8),
             "total_cost": round(total_cost, 6),
             "cost_to_planned_risk": round(total_cost / planned_risk, 4) if planned_risk > 0 else 0.0,
             "exit_order_id": exit_order.id,

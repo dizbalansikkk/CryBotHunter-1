@@ -51,6 +51,9 @@ class PreparedOrder:
 
 
 class ExchangeClient:
+    _NATIVE_PROTECTIVE_STOP_EXCHANGES = {"binance", "okx", "bybit"}
+    _DERIVATIVE_MARKET_TYPES = {"future", "futures", "swap"}
+
     def __init__(
         self,
         exchange: str | None = None,
@@ -167,6 +170,60 @@ class ExchangeClient:
         client = self._client(authenticated=True)
         params = self._order_params(client_order_id=client_order_id, reduce_only=reduce_only)
         return await asyncio.to_thread(client.create_order, symbol, order_type, side, amount, None, params)
+
+    def supports_native_protective_stops(self) -> bool:
+        """Whether a reduce-only exchange stop can be used safely.
+
+        A spot stop has no reliable reduce-only guarantee across the supported
+        venues.  It could sell an unrelated wallet balance, so spot positions
+        keep the engine's local stop monitor instead.  Binance, OKX and Bybit
+        derivatives all accept CCXT's ``stopLossPrice`` and ``reduceOnly``
+        parameters.
+        """
+        market_type = str(self.settings.exchange_default_type or "spot").lower()
+        return (
+            not self.settings.paper_trading
+            and bool(getattr(self.settings, "native_protective_stops_enabled", True))
+            and self.exchange in self._NATIVE_PROTECTIVE_STOP_EXCHANGES
+            and market_type in self._DERIVATIVE_MARKET_TYPES
+        )
+
+    async def create_protective_stop_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        stop_price: float,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a reduce-only stop-market close for a derivatives position.
+
+        We intentionally use the unified CCXT ``create_order`` API rather
+        than an exchange-specific endpoint.  On Binance, OKX and Bybit CCXT
+        maps ``stopLossPrice`` plus a market order to that venue's conditional
+        stop order.  The response ID is the acknowledgement we persist before
+        relying on the exchange-side protection.
+        """
+        if not self.supports_native_protective_stops():
+            raise RuntimeError("Native protective stop is unavailable for the configured exchange/market type.")
+        if amount <= 0 or stop_price <= 0:
+            raise RuntimeError("Protective stop amount and trigger price must be positive.")
+        if not self.settings.live_trading_enabled:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING_ENABLED=true only after paper validation.")
+        self._assert_live_safety()
+        client = self._client(authenticated=True)
+        params = self._order_params(client_order_id=client_order_id, reduce_only=True)
+        params["stopLossPrice"] = stop_price
+        return await asyncio.to_thread(client.create_order, symbol, "market", side, amount, None, params)
+
+    async def cancel_order(self, order_id: str, symbol: str) -> dict[str, Any]:
+        if self.settings.paper_trading:
+            return {"id": order_id, "symbol": symbol, "status": "canceled"}
+        if not self.settings.live_trading_enabled:
+            raise RuntimeError("Live trading is disabled.")
+        self._assert_live_safety()
+        client = self._client(authenticated=True)
+        return await asyncio.to_thread(client.cancel_order, order_id, symbol)
 
     async def fetch_order(self, order_id: str, symbol: str) -> dict[str, Any]:
         if self.settings.paper_trading:

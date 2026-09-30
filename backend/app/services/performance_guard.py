@@ -81,6 +81,80 @@ class PerformanceGuardService:
             now=now,
         )
 
+    async def evaluate_symbol(
+        self,
+        db: AsyncSession,
+        symbol: str,
+        *,
+        now: datetime | None = None,
+    ) -> PerformanceGuardReport:
+        """Protect a single pair without halting otherwise healthy markets."""
+        settings = get_settings()
+        if not settings.symbol_guard_enabled:
+            return PerformanceGuardReport(True, "symbol performance guard disabled", 0, 0, 0, 0)
+
+        limit = max(int(settings.symbol_guard_min_trades), 1)
+        raw_rows = (
+            await db.execute(
+                select(Position.pnl, Position.closed_at, Position.entry_context)
+                .where(
+                    Position.status == "CLOSED",
+                    Position.symbol == symbol,
+                    Position.closed_at.is_not(None),
+                )
+                .order_by(Position.closed_at.desc(), Position.id.desc())
+                .limit(limit * 10)
+            )
+        ).all()
+        rows = [
+            (float(row[0]), row[1])
+            for row in raw_rows
+            if not self._is_paper_exploration(row[2] if len(row) > 2 else None)
+        ][:limit]
+        if len(rows) < limit:
+            return PerformanceGuardReport(True, "not enough closed trades for symbol guard", len(rows), 0, 0, 0)
+
+        profits = [profit for profit, _closed_at in rows]
+        wins = sum(profit > 0 for profit in profits)
+        win_rate = wins / len(profits) * 100
+        total_profit = sum(profits)
+        loss_streak = self.loss_streak(profits)
+        common = {
+            "trades_checked": len(rows),
+            "win_rate": round(win_rate, 2),
+            "loss_streak": loss_streak,
+            "total_profit": round(total_profit, 2),
+        }
+        reasons: list[str] = []
+        if win_rate < float(settings.symbol_guard_min_win_rate):
+            reasons.append(f"win rate {win_rate:.2f}% below {settings.symbol_guard_min_win_rate:.2f}%")
+        if total_profit < float(settings.symbol_guard_min_total_profit):
+            reasons.append(f"net profit {total_profit:.2f} below {settings.symbol_guard_min_total_profit:.2f}")
+        if not reasons:
+            return PerformanceGuardReport(True, "symbol performance guard passed", **common)
+
+        most_recent_loss = next((closed_at for profit, closed_at in rows if profit < 0), rows[0][1])
+        current_time = self._aware(now or datetime.now(timezone.utc))
+        cooldown = timedelta(hours=max(float(settings.symbol_guard_cooldown_hours), 0.0))
+        retry_at = self._aware(most_recent_loss) + cooldown
+        reason = f"symbol performance guard {symbol}: {'; '.join(reasons)}"
+        if current_time < retry_at:
+            return PerformanceGuardReport(
+                False,
+                f"{reason}; cooldown until {retry_at.isoformat()}",
+                retry_at=retry_at,
+                **common,
+            )
+
+        risk_multiplier = min(max(float(settings.symbol_guard_recovery_risk_multiplier), 0.01), 0.5)
+        return PerformanceGuardReport(
+            True,
+            f"symbol recovery probe for {symbol}; risk reduced to {risk_multiplier:.2f}x after {'; '.join(reasons)}",
+            recovery_mode=True,
+            risk_multiplier=risk_multiplier,
+            **common,
+        )
+
     def _recovery_decision(
         self,
         *,

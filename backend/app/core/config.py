@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     guard_recovery_cooldown_hours: float = 6.0
     guard_recovery_risk_multiplier: float = 0.25
     guard_recovery_max_positions: int = 1
+    symbol_guard_enabled: bool = True
+    symbol_guard_min_trades: int = 5
+    symbol_guard_min_win_rate: float = 40.0
+    symbol_guard_min_total_profit: float = 0.0
+    symbol_guard_cooldown_hours: float = 24.0
+    symbol_guard_recovery_risk_multiplier: float = 0.25
     ai_committee_enabled: bool = True
     ai_committee_min_consensus: float = 0.75
     entry_microstructure_enabled: bool = True
@@ -94,13 +100,17 @@ class Settings(BaseSettings):
     entry_microstructure_depth: int = 20
     entry_microstructure_trade_limit: int = 100
     entry_microstructure_max_spread_bps: float = 20.0
+    entry_microstructure_min_sources: int = 2
     entry_microstructure_min_consensus: float = 0.5
     entry_microstructure_fail_open_risk_multiplier: float = 0.65
     entry_microstructure_neutral_risk_multiplier: float = 0.75
+    entry_microstructure_require_data: bool = True
+    entry_microstructure_neutral_entries_enabled: bool = False
     max_gross_exposure_percent: float = 300.0
     max_symbol_exposure_percent: float = 100.0
     max_position_size_percent: float = 25.0
     max_drawdown_percent: float = 5.0
+    daily_risk_reserve_enabled: bool = True
     trade_memory_sqlite_path: str = "data/trade_memory.sqlite3"
     max_same_side_positions: int = 2
     directional_risk_reduction_start: int = 1
@@ -112,6 +122,7 @@ class Settings(BaseSettings):
     pretrade_quality_min_profitable_windows_percent: float = 50.0
     pretrade_quality_min_trades: int = 3
     pretrade_quality_min_risk_multiplier: float = 0.35
+    pretrade_quality_require_history: bool = True
     market_quality_min_quote_volume: float = 25_000_000.0
     market_quality_hard_min_quote_volume: float = 5_000_000.0
     market_quality_max_spread_bps: float = 25.0
@@ -131,7 +142,10 @@ class Settings(BaseSettings):
     loss_cooldown_global_hours: float = 3.0
     loss_cooldown_loss_streak: int = 2
     loss_cooldown_min_loss: float = 0.0
-    paper_exploration_enabled: bool = True
+    # Exploratory entries intentionally bypass the strict strategy's WAIT
+    # decision. They are useful while developing a paper strategy, but should
+    # never be the default source of production-like entries.
+    paper_exploration_enabled: bool = False
     paper_exploration_min_score: int = 60
     paper_exploration_risk_percent: float = 0.15
     paper_exploration_max_risk_percent: float = 0.15
@@ -141,6 +155,24 @@ class Settings(BaseSettings):
     paper_exploration_min_directional_votes: int = 4
     paper_exploration_min_vote_margin: int = 2
     paper_exploration_cooldown_minutes: int = 180
+    strategy_min_volume_ratio: float = 1.05
+    strategy_max_entry_distance_atr: float = 1.5
+    # At the initial take-profit, realise part of a winner and move the next
+    # target and stop by the market's own volatility instead of a fixed price.
+    dynamic_take_profit_enabled: bool = True
+    dynamic_take_profit_partial_close_percent: float = 35.0
+    dynamic_take_profit_extension_atr: float = 1.5
+    dynamic_take_profit_max_extensions: int = 2
+    # Every partial exit must meet the exchange minimum.  This fallback also
+    # protects paper/live deployments when a venue omits min-cost metadata.
+    min_exit_notional_usdt: float = 5.0
+    scale_out_tp2_percent: float = 35.0
+    scale_out_tp2_distance_percent: float = 1.25
+    breakeven_slippage_buffer_bps: float = 2.0
+    protective_stop_replace_timeout_seconds: int = 5
+    # Native stops are safe only for reduce-only derivatives positions.  Spot
+    # keeps a local monitor so a stop cannot liquidate unrelated wallet funds.
+    native_protective_stops_enabled: bool = True
     learning_progress_target_trades: int = 30
     learning_progress_target_observations: int = 100
     post_mortem_enabled: bool = True

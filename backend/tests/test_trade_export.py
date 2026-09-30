@@ -73,7 +73,13 @@ def test_trade_audit_archive_contains_full_position_decision_and_execution_histo
         replay_count=0,
         created_at=NOW,
     )
-    event = LogEntry(id=7, level="INFO", message="Closed ETH/USDT #17: TAKE_PROFIT, pnl=15.00", created_at=NOW)
+    event = LogEntry(
+        id=7,
+        level="INFO",
+        message="Closed ETH/USDT #17: TAKE_PROFIT, pnl=15.00",
+        context={"event": "POSITION_CLOSED", "symbol": "ETH/USDT", "pnl": 15},
+        created_at=NOW,
+    )
 
     payload = TradeAuditExportService().build_archive(
         positions=[position],
@@ -95,12 +101,14 @@ def test_trade_audit_archive_contains_full_position_decision_and_execution_histo
             "trade-journal.csv",
         }
         journal = list(csv.DictReader(io.StringIO(archive.read("trade-journal.csv").decode("utf-8-sig"))))
+        events = list(csv.DictReader(io.StringIO(archive.read("trade-events.csv").decode("utf-8-sig"))))
         summary = json.loads(archive.read("summary.json"))
 
     assert journal[0]["position_id"] == "17"
     assert journal[0]["decision_reason"] == "all gates passed"
     assert "ALLOW" in journal[0]["agent_votes"]
     assert journal[0]["post_mortem_label"] == "DISCIPLINED_WIN"
+    assert json.loads(events[0]["context"])["event"] == "POSITION_CLOSED"
     assert summary["positions"] == 1
     assert summary["closed_positions"] == 1
     assert summary["orders"] == 1

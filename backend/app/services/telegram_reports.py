@@ -167,16 +167,27 @@ def format_partial_take_profit(
     closed_volume: float,
     exit_price: float,
     profit: float,
+    next_take: float | None = None,
+    locked_stop: float | None = None,
 ) -> str:
+    dynamic_protection = (
+        f"\n├ Новый SL: <code>{_price(locked_stop)}</code>"
+        f"\n└ Следующий TP: <code>{_price(next_take)}</code>"
+        if next_take is not None and locked_stop is not None
+        else ""
+    )
+    heading = "💰 ДИНАМИЧЕСКИЙ ТЕЙК-ПРОФИТ" if dynamic_protection else "💰 ЧАСТЬ ПРИБЫЛИ ЗАФИКСИРОВАНА"
+    pnl_prefix = "├" if dynamic_protection else "└"
     return (
-        "<b>💰 ЧАСТЬ ПРИБЫЛИ ЗАФИКСИРОВАНА</b>\n"
+        f"<b>{heading}</b>\n"
         f"<code>{_html(position.symbol)} · {_html(_side_label(position.side))} · #{position.id}</code>\n\n"
         "<b>Исполнение</b>\n"
         f"├ Закрытый объём: <code>{closed_volume:.8f}</code>\n"
         f"├ Цена фиксации: <code>{_price(exit_price)}</code>\n"
         f"├ Результат части: <b>{profit:+.2f} USDT</b>\n"
         f"├ Остаток: <code>{float(position.volume):.8f}</code>\n"
-        f"└ Общий PnL: <b>{float(position.pnl):+.2f} USDT</b>"
+        f"{pnl_prefix} Общий PnL: <b>{float(position.pnl):+.2f} USDT</b>"
+        f"{dynamic_protection}"
     )
 
 

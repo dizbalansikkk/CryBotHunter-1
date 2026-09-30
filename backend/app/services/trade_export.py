@@ -188,6 +188,7 @@ class TradeAuditExportService:
                 "created_at": self._date(item.created_at),
                 "level": item.level,
                 "message": item.message,
+                "context": self._json(item.context or {}),
             }
             for item in events
         ]

@@ -95,3 +95,67 @@ def test_gatekeeper_never_allows_entry_against_strong_macro_regime():
 
     assert assessment.allowed is False
     assert "macro gate" in assessment.reason
+
+
+def test_gatekeeper_blocks_unavailable_microstructure_by_default():
+    assessment = EntryGatekeeper().assess(coin(), "BUY", {"status": "UNAVAILABLE"})
+
+    assert assessment.allowed is False
+    assert "no usable entry microstructure data" in assessment.reason
+
+
+def test_gatekeeper_blocks_neutral_flow_unless_explicitly_enabled():
+    gate = EntryGatekeeper()
+    gate.settings = SimpleNamespace(
+        entry_microstructure_fail_open_risk_multiplier=0.65,
+        entry_microstructure_neutral_risk_multiplier=0.75,
+        entry_microstructure_max_spread_bps=20,
+        entry_microstructure_min_consensus=0.5,
+        entry_microstructure_require_data=True,
+        entry_microstructure_neutral_entries_enabled=False,
+    )
+    snapshot = {
+        "status": "READY",
+        "spread_bps": 3,
+        "order_book_available": True,
+        "order_book_imbalance": 0.0,
+    }
+
+    assessment = gate.assess(coin(), "BUY", snapshot)
+
+    assert assessment.allowed is False
+    assert "insufficient independent sources" in assessment.reason
+
+
+def test_gatekeeper_requires_two_independent_microstructure_sources_by_default():
+    assessment = EntryGatekeeper().assess(
+        coin(),
+        "BUY",
+        {
+            "status": "PARTIAL",
+            "spread_bps": 3,
+            "order_book_available": True,
+            "order_book_imbalance": 0.8,
+        },
+    )
+
+    assert assessment.allowed is False
+    assert "1/2" in assessment.reason
+
+
+def test_gatekeeper_allows_two_agreeing_microstructure_sources():
+    assessment = EntryGatekeeper().assess(
+        coin(),
+        "BUY",
+        {
+            "status": "READY",
+            "spread_bps": 3,
+            "order_book_available": True,
+            "order_book_imbalance": 0.5,
+            "tape_available": True,
+            "trade_flow_imbalance": 0.4,
+        },
+    )
+
+    assert assessment.allowed is True
+    assert "passed" in assessment.reason

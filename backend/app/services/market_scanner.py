@@ -57,20 +57,29 @@ class MarketScanner:
 
     async def _scan_ccxt_symbol(self, symbol: str, ticker: dict[str, Any]) -> MarketCoin | None:
         candles = await self.exchange.fetch_ohlcv(symbol, timeframe="1h", limit=250)
-        if len(candles) < 200:
+        # The exchange normally includes the in-progress hour. Do not let an
+        # unfinished candle rewrite EMA/RSI/MACD and create a transient entry.
+        completed_candles = candles[:-1]
+        if len(completed_candles) < 200:
             return None
-        frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        frame = pd.DataFrame(completed_candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
         market_context, indicator_frame = await asyncio.gather(
             self.context_manager.get_market_context(frame),
             asyncio.to_thread(self.calculate_indicators, frame.copy(deep=True)),
         )
         indicators = indicator_frame.iloc[-1]
+        quote_volume = frame["volume"] * frame["close"]
+        rolling_24h_volume = quote_volume.rolling(24, min_periods=24).sum()
+        historical_24h_volume = rolling_24h_volume.iloc[:-1].dropna().tail(24 * 7)
+        average_volume_24h = float(historical_24h_volume.mean()) if not historical_24h_volume.empty else 0.0
+        observed_volume_24h = float(rolling_24h_volume.iloc[-1]) if len(rolling_24h_volume) else 0.0
         bid = self._optional_float(ticker.get("bid"))
         ask = self._optional_float(ticker.get("ask"))
         row = {
             "symbol": symbol,
             "price": float(ticker.get("last") or indicators["close"]),
-            "volume_24h": float(ticker.get("quoteVolume") or frame.tail(24)["volume"].sum()),
+            "volume_24h": float(ticker.get("quoteVolume") or observed_volume_24h),
+            "volume_average_24h": average_volume_24h,
             "price_change_percent": float(ticker.get("percentage") or 0),
             "atr": market_context.atr,
             "rsi": market_context.rsi,
@@ -160,6 +169,7 @@ class MarketScanner:
         base = {"BTC/USDT": 68000, "ETH/USDT": 3600, "SOL/USDT": 155, "BNB/USDT": 620}.get(symbol, 2.5)
         shift = rng.uniform(-0.04, 0.06)
         price = base * (1 + shift)
+        volume_24h = rng.uniform(300_000_000, 3_000_000_000)
         spread_bps = rng.uniform(1.5, 18.0)
         half_spread = price * spread_bps / 20_000
         ema200 = price * rng.uniform(0.94, 1.03)
@@ -167,7 +177,8 @@ class MarketScanner:
         return {
             "symbol": symbol,
             "price": round(price, 4),
-            "volume_24h": rng.uniform(300_000_000, 3_000_000_000),
+            "volume_24h": volume_24h,
+            "volume_average_24h": volume_24h * rng.uniform(0.75, 1.1),
             "price_change_percent": shift * 100,
             "atr": price * rng.uniform(0.01, 0.05),
             "rsi": rng.uniform(28, 74),

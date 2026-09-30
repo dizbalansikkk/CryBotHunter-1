@@ -20,7 +20,7 @@ class RiskSettings:
     breakeven_trigger_r: float = 1.0
     breakeven_offset_percent: float = 0.05
     partial_take_profit_r: float = 1.0
-    partial_close_percent: float = 50.0
+    partial_close_percent: float = 25.0
     max_risk_percent_per_trade: float = 2.0
     min_risk_reward_ratio: float = 1.5
     max_position_size_percent: float = 25.0
@@ -222,6 +222,35 @@ class RiskManager:
         if current_symbol_exposure + candidate_notional > symbol_limit:
             return False, "symbol exposure limit reached"
         return True, "exposure accepted"
+
+    def can_add_daily_risk_reserve(
+        self,
+        *,
+        balance: float,
+        daily_risk_percent: float,
+        daily_pnl: float,
+        reserved_open_stop_risk: float,
+        candidate_stop_risk: float,
+    ) -> tuple[bool, str]:
+        """Reject a new position when all open stops plus its stop break the daily budget."""
+        if not all(self._is_positive_finite(value) for value in (balance, daily_risk_percent)):
+            return False, "invalid daily risk budget inputs"
+        if not all(self._is_finite(value) for value in (daily_pnl, reserved_open_stop_risk, candidate_stop_risk)):
+            return False, "invalid daily risk budget inputs"
+        if reserved_open_stop_risk < 0 or candidate_stop_risk <= 0:
+            return False, "invalid daily risk reservation"
+
+        loss_limit = float(balance) * float(daily_risk_percent) / 100
+        projected_pnl_at_stops = float(daily_pnl) - float(reserved_open_stop_risk) - float(candidate_stop_risk)
+        if projected_pnl_at_stops < -loss_limit:
+            return (
+                False,
+                (
+                    "daily risk reserve would exceed limit: "
+                    f"projected={projected_pnl_at_stops:.2f}, limit={-loss_limit:.2f}"
+                ),
+            )
+        return True, "daily risk reserve accepted"
 
     def directional_exposure(
         self,

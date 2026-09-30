@@ -37,7 +37,7 @@ class SettingsIn(BaseModel):
     breakeven_trigger_r: float = Field(default=1.0, ge=0.1, le=10)
     breakeven_offset_percent: float = Field(default=0.05, ge=0, le=5)
     partial_take_profit_r: float = Field(default=1.0, ge=0.1, le=10)
-    partial_close_percent: float = Field(default=50.0, ge=1, le=90)
+    partial_close_percent: float = Field(default=25.0, ge=10, le=30)
 
 
 class SettingsOut(BaseModel):
@@ -67,6 +67,7 @@ class MarketCoin(BaseModel):
     symbol: str
     price: float
     volume_24h: float
+    volume_average_24h: float = 0
     price_change_percent: float
     atr: float
     rsi: float
@@ -530,6 +531,44 @@ class PositionOut(BaseModel):
     closed_at: datetime | None = None
 
 
+class TradeChartCandleOut(BaseModel):
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    source: str
+
+
+class TradeChartLevelOut(BaseModel):
+    key: str
+    label: str
+    price: float
+    kind: Literal["ENTRY", "STOP", "TAKE", "BREAKEVEN", "EXIT"]
+    factual: bool = True
+
+
+class TradeChartMarkerOut(BaseModel):
+    key: str
+    label: str
+    timestamp: datetime
+    price: float
+    kind: Literal["ENTRY", "EXIT"]
+
+
+class TradeChartOut(BaseModel):
+    position_id: int
+    symbol: str
+    side: str
+    status: str
+    timeframe: str
+    candles: list[TradeChartCandleOut] = Field(default_factory=list)
+    levels: list[TradeChartLevelOut] = Field(default_factory=list)
+    markers: list[TradeChartMarkerOut] = Field(default_factory=list)
+    data_note: str | None = None
+
+
 class OrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -554,6 +593,7 @@ class LogOut(BaseModel):
     id: int
     level: str
     message: str
+    context: dict = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -614,6 +654,34 @@ class TradeAnalyticsOut(BaseModel):
     max_loss_streak: int
     by_symbol: list[SymbolPerformanceOut] = Field(default_factory=list)
     recent_trades: list[TradeHistoryItemOut] = Field(default_factory=list)
+
+
+class TradingAuditOut(BaseModel):
+    """Fact-only thirty-calendar-day report. Nested sections are extensible."""
+
+    generated_at: str
+    timezone: str
+    period: dict
+    data_quality: dict
+    total: dict
+    daily_results: list[dict]
+    daily_analysis: dict
+    time_sequence: dict
+    before_after_changes: dict
+    by_symbol: list[dict]
+    top_symbols: dict
+    loss_causes: dict
+    entry_analysis: dict
+    take_profit: dict
+    stop_loss: dict
+    capital_and_risk: dict
+    position_correlation: dict
+    streaks: dict
+    decision_algorithm: dict
+    external_sources: dict
+    limitations: list[dict]
+    final_15: list[dict]
+    final_conclusion: dict
 
 
 class DashboardOut(BaseModel):

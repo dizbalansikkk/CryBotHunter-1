@@ -16,10 +16,10 @@ import {
   Terminal,
   XCircle
 } from "lucide-react";
-import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, RlModel, ShadowTrade, StrategyOptimization, SystemStatus, TradeAnalytics, TradePostMortem, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
+import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, Position, RlModel, ShadowTrade, StrategyOptimization, SystemStatus, TradeAnalytics, TradeChart, TradePostMortem, TradingAudit, TradingAuditDay, TradingAuditSymbol, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
 import "./styles.css";
 
-type View = "dashboard" | "market" | "agents" | "logs" | "settings";
+type View = "dashboard" | "audit" | "market" | "agents" | "logs" | "settings";
 
 const TRADING_SYMBOLS = [
   "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT",
@@ -95,6 +95,7 @@ function App() {
           <div className="brand-mark"><Bot size={20} /> CryBotHunter</div>
           <div className="nav-group">
             <NavButton active={view === "dashboard"} onClick={() => setView("dashboard")} icon={<Activity size={16} />} label="Панель" />
+            <NavButton active={view === "audit"} onClick={() => setView("audit")} icon={<BarChart3 size={16} />} label="Аудит 30д" />
             <NavButton active={view === "market"} onClick={() => setView("market")} icon={<BarChart3 size={16} />} label="Рынок" />
             <NavButton active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={16} />} label="Агенты" />
             <NavButton active={view === "logs"} onClick={() => setView("logs")} icon={<Terminal size={16} />} label="Логи" />
@@ -105,6 +106,7 @@ function App() {
       </nav>
       <div className="page">
         {view === "dashboard" && <DashboardView />}
+        {view === "audit" && <TradingAuditView />}
         {view === "market" && <MarketView />}
         {view === "agents" && <AgentsView />}
         {view === "logs" && <LogsView />}
@@ -505,6 +507,7 @@ function DashboardView() {
           )}
         </div>
       </div>
+      <TradeChartsPanel />
       <OrdersTable orders={orders} onChanged={load} />
       <LearningInsightsPanel data={learningInsights} />
       <LearningRulesTable items={learningRules} summary={learningSummary} />
@@ -513,6 +516,177 @@ function DashboardView() {
       <OptimizationTable items={optimizations} />
     </section>
   );
+}
+
+function TradingAuditView() {
+  const [data, setData] = React.useState<TradingAudit | null>(null);
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      setError("");
+      const response = await api.get<TradingAudit>("/audit/trading-30d");
+      setData(response.data);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => void load(), [load]);
+  const total = data?.total;
+  const conclusion = data?.final_conclusion;
+
+  return (
+    <section className="space-y-5">
+      <Header title="Аудит торговли — 30 полных дней" subtitle="Только сохранённые торговые факты. Отсутствующие данные обозначены явно и не заменяются предположениями.">
+        <button className="btn" onClick={() => void load()} disabled={loading}><RefreshCw size={16} /> {loading ? "Обновляется" : "Обновить отчёт"}</button>
+      </Header>
+      {error && <Alert tone="danger" text={error} />}
+      {data && <>
+        <div className="status-strip">
+          <StatusItem label="Период" value={`${data.period.start} — ${data.period.end_exclusive}`} />
+          <StatusItem label="Часовой пояс" value={data.timezone} />
+          <StatusItem label="Торговых дней" value={String(data.period.trading_days ?? 0)} />
+          <StatusItem label="Закрытых сделок" value={String(data.period.closed_trades ?? 0)} />
+        </div>
+        <div className="metric-grid">
+          <Metric label="Net PnL, USDT" value={`$${fmt(total?.net_pnl)}`} tone={(total?.net_pnl ?? 0) >= 0 ? "good" : "bad"} />
+          <Metric label="Win Rate" value={`${fmt(total?.win_rate)}%`} />
+          <Metric label="Gross Profit, USDT" value={`$${fmt(total?.gross_profit)}`} tone="good" />
+          <Metric label="Gross Loss, USDT" value={`$${fmt(total?.gross_loss)}`} tone="bad" />
+          <Metric label="Profit Factor" value={formatProfitFactor(total?.profit_factor)} tone={(total?.profit_factor ?? 0) >= 1 ? "good" : "bad"} />
+        </div>
+        <AuditFacts title="Качество и границы расчёта" data={data.data_quality} />
+        <AuditDailyTable rows={data.daily_results} />
+        <AuditTimeline data={data.time_sequence} />
+        <div className="two-col">
+          <AuditFacts title="Дневной анализ" data={data.daily_analysis} />
+          <AuditFacts title="До и после корректировок" data={data.before_after_changes} />
+        </div>
+        <AuditSymbolTable rows={data.by_symbol} />
+        <div className="two-col">
+          <AuditFacts title="Топ-5 по положительному PnL" data={{ pairs: data.top_symbols.positive }} />
+          <AuditFacts title="Топ-5 по отрицательному PnL" data={{ pairs: data.top_symbols.negative }} />
+        </div>
+        <div className="two-col">
+          <AuditFacts title="Причины убыточных сделок" data={data.loss_causes} />
+          <AuditFacts title="Точка входа: MFE/MAE и раннее движение" data={data.entry_analysis} />
+        </div>
+        <div className="two-col">
+          <AuditFacts title="Take Profit" data={data.take_profit} />
+          <AuditFacts title="Stop Loss" data={data.stop_loss} />
+        </div>
+        <div className="two-col">
+          <AuditFacts title="Капитал и риск" data={data.capital_and_risk} />
+          <AuditFacts title="Одновременные позиции и корреляция" data={data.position_correlation} />
+        </div>
+        <AuditFacts title="Серии убытков" data={data.streaks} />
+        <AuditDecisionAlgorithm data={data.decision_algorithm} />
+        <AuditExternalSources data={data.external_sources} />
+        <AuditFinal15 items={data.final_15} />
+        <AuditConclusion data={conclusion} />
+        <div className="table-wrap">
+          <div className="table-title">Каких данных не хватает для достоверных выводов</div>
+          <table>
+            <thead><tr><th>Раздел</th><th>Причина</th></tr></thead>
+            <tbody>
+              {data.limitations.map((item) => <tr key={item.area}><td className="font-semibold">{item.area}</td><td>{item.message}</td></tr>)}
+              {!data.limitations.length && <EmptyRow cols={2} text="Ограничения не зафиксированы" />}
+            </tbody>
+          </table>
+        </div>
+      </>}
+    </section>
+  );
+}
+
+function AuditDailyTable({ rows }: { rows: TradingAuditDay[] }) {
+  return (
+    <div className="table-wrap">
+      <div className="table-title">Результат по каждому дню — все суммы в USDT</div>
+      <table>
+        <thead><tr><th>Дата</th><th>Сделок</th><th>Прибыльных</th><th>Убыточных</th><th>Win Rate</th><th>Gross Profit</th><th>Gross Loss</th><th>Net PnL</th><th>Средний PnL</th><th>Max DD</th><th>Profit Factor</th></tr></thead>
+        <tbody>
+          {rows.map((row) => <tr key={row.date}>
+            <td className="font-semibold">{row.date}</td><td>{row.trades}</td><td>{row.profitable}</td><td>{row.losing}</td><td>{fmt(row.win_rate)}%</td>
+            <td className="text-accent">${fmt(row.gross_profit)}</td><td className="text-danger">${fmt(row.gross_loss)}</td>
+            <td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_drawdown)}</td><td>{formatProfitFactor(row.profit_factor)}</td>
+          </tr>)}
+          {!rows.length && <EmptyRow cols={11} text="Дневных записей нет" />}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AuditTimeline({ data }: { data: Record<string, unknown> }) {
+  const timeline = Array.isArray(data.timeline) ? data.timeline as Array<Record<string, unknown>> : [];
+  const change = data.change_point;
+  return <div className="table-wrap">
+    <div className="table-title">Временная последовательность: День 1 → День 30</div>
+    <div className="audit-timeline">
+      {timeline.map((row) => {
+        const pnl = Number(row.net_pnl ?? 0);
+        return <div className={`audit-day ${pnl > 0 ? "positive" : pnl < 0 ? "negative" : "neutral"}`} key={String(row.day)}>
+          <strong>День {String(row.day)}</strong><span>{String(row.date)}</span><span>PNL ${fmt(pnl)}</span><span>{String(row.trades)} сделок · {fmt(Number(row.win_rate ?? 0))}%</span>
+        </div>;
+      })}
+    </div>
+    <div className="audit-fact-line"><strong>Точка изменения:</strong> {auditValue(change)}</div>
+  </div>;
+}
+
+function AuditSymbolTable({ rows }: { rows: TradingAuditSymbol[] }) {
+  return <div className="table-wrap">
+    <div className="table-title">Результат по каждой торговой паре — не сгруппировано по категориям</div>
+    <table><thead><tr><th>Монета</th><th>Сделок</th><th>Win Rate</th><th>Gross Profit</th><th>Gross Loss</th><th>Net PnL</th><th>Avg PnL</th><th>Max Loss</th><th>Max Win</th><th>Profit Factor</th></tr></thead>
+      <tbody>{rows.map((row) => <tr key={row.symbol}><td className="font-semibold">{row.symbol}</td><td>{row.trades}</td><td>{fmt(row.win_rate)}%</td><td className="text-accent">${fmt(row.gross_profit)}</td><td className="text-danger">${fmt(row.gross_loss)}</td><td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_loss ?? undefined)}</td><td>${fmt(row.max_win ?? undefined)}</td><td>{formatProfitFactor(row.profit_factor)}</td></tr>)}
+      {!rows.length && <EmptyRow cols={10} text="Закрытых сделок за период нет" />}</tbody>
+    </table>
+  </div>;
+}
+
+function AuditDecisionAlgorithm({ data }: { data: Record<string, unknown> }) {
+  const sequence = Array.isArray(data.sequence) ? data.sequence : [];
+  const conditions = Array.isArray(data.simultaneous_conditions) ? data.simultaneous_conditions : [];
+  const inputs = Array.isArray(data.inputs) ? data.inputs as Array<Record<string, unknown>> : [];
+  return <div className="space-y-5">
+    <div className="two-col"><AuditFacts title="Фактическая последовательность открытия позиции" data={{ source: data.source, steps: sequence }} /><AuditFacts title="Условия, которые должны выполняться одновременно" data={{ conditions }} /></div>
+    <div className="table-wrap"><div className="table-title">Используемые данные и их влияние на решение</div><table><thead><tr><th>Категория</th><th>Параметр</th><th>Используется</th><th>Как влияет</th></tr></thead><tbody>{inputs.map((item, index) => <tr key={`${String(item.parameter)}-${index}`}><td>{String(item.category)}</td><td className="font-semibold">{String(item.parameter)}</td><td><span className={`pill ${item.used ? "buy" : "sell"}`}>{item.used ? "Да" : "Нет"}</span></td><td>{String(item.how)}</td></tr>)}{!inputs.length && <EmptyRow cols={4} text="Описание алгоритма недоступно" />}</tbody></table></div>
+  </div>;
+}
+
+function AuditExternalSources({ data }: { data: TradingAudit["external_sources"] }) {
+  return <div className="table-wrap"><div className="table-title">Внешние источники и влияние на вход/выход</div><table><thead><tr><th>Источник</th><th>Используется</th><th>Как часто</th><th>Какие данные</th><th>Вход</th><th>Выход</th></tr></thead><tbody>{(data.sources ?? []).map((item, index) => <tr key={`${String(item.source)}-${index}`}><td className="font-semibold">{String(item.source)}</td><td>{item.used ? "Да" : "Нет"}</td><td>{String(item.frequency)}</td><td>{String(item.data)}</td><td>{item.affects_entry ? "Да" : "Нет"}</td><td>{item.affects_exit ? "Да" : "Нет"}</td></tr>)}{!(data.sources ?? []).length && <EmptyRow cols={6} text="Сведения об источниках отсутствуют" />}</tbody></table><div className="audit-fact-line"><strong>Технический анализ без новостей:</strong> {data.answer ?? "—"}</div></div>;
+}
+
+function AuditFacts({ title, data }: { title: string; data: Record<string, unknown> }) {
+  return <div className="panel-block"><div className="table-title">{title}</div><div className="audit-facts">{Object.entries(data).map(([key, value]) => <div key={key}><strong>{auditLabel(key)}</strong><span>{auditValue(value)}</span></div>)}</div></div>;
+}
+
+function AuditFinal15({ items }: { items: TradingAudit["final_15"] }) {
+  return <div className="table-wrap"><div className="table-title">Итоговый отчёт в 15 пунктах</div><table><thead><tr><th>Вопрос</th><th>Фактический ответ</th></tr></thead><tbody>{items.map((item) => <tr key={item.question}><td className="font-semibold">{item.question}</td><td>{auditValue(item.answer)}</td></tr>)}{!items.length && <EmptyRow cols={2} text="Итоговые пункты недоступны" />}</tbody></table></div>;
+}
+
+function AuditConclusion({ data }: { data: TradingAudit["final_conclusion"] | undefined }) {
+  if (!data) return null;
+  return <div className="space-y-5"><AuditConclusionBlock title="ЧТО РАБОТАЕТ" items={data.what_works} /><AuditConclusionBlock title="ЧТО НЕ РАБОТАЕТ" items={data.what_does_not_work} /><div className="table-wrap"><div className="table-title">ЧТО НУЖНО ПРОВЕРИТЬ В ПЕРВУЮ ОЧЕРЕДЬ</div><table><thead><tr><th>Проблема</th><th>Доказательство</th><th>Предполагаемое влияние</th><th>Какие данные нужны</th></tr></thead><tbody>{data.check_first.map((item) => <tr key={item.problem}><td className="font-semibold">{item.problem}</td><td>{item.evidence}</td><td>{item.expected_impact}</td><td>{item.required_data}</td></tr>)}</tbody></table></div></div>;
+}
+
+function AuditConclusionBlock({ title, items }: { title: string; items: Array<{ statement: string; evidence: string }> }) {
+  return <div className="panel-block"><div className="table-title">{title}</div><div className="audit-facts">{items.map((item, index) => <div key={`${item.statement}-${index}`}><strong>{item.statement}</strong><span>{item.evidence}</span></div>)}</div></div>;
+}
+
+function auditLabel(value: string) { return value.replace(/_/g, " "); }
+function auditValue(value: unknown): string {
+  if (value == null) return "—";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.length ? value.map(auditValue).join(" · ") : "—";
+  try { return JSON.stringify(value, null, 2); } catch { return "—"; }
 }
 
 function LearningProgressPanel({ data }: { data: LearningProgress | null }) {
@@ -1105,22 +1279,79 @@ function LogsView() {
       setExporting(false);
     }
   }
+  function contextSummary(context: Record<string, unknown>) {
+    const labels: Array<[string, string]> = [
+      ["event", "событие"],
+      ["gate", "проверка"],
+      ["symbol", "пара"],
+      ["side", "направление"],
+      ["signal", "сигнал"],
+      ["lane", "режим"],
+      ["score", "оценка"],
+      ["pnl", "PnL"],
+      ["position_id", "позиция"],
+      ["order_id", "ордер"],
+      ["order_status", "статус ордера"],
+      ["requested_volume", "заявлено"],
+      ["filled_volume", "исполнено"],
+      ["remaining_volume", "остаток"],
+      ["exit_price", "цена выхода"],
+      ["exit_fee", "комиссия выхода"],
+      ["partial_profit", "PnL части"],
+      ["previous_take", "предыдущий TP"],
+      ["next_take", "следующий TP"],
+      ["locked_stop", "защитный SL"],
+      ["extension_distance", "ATR-шаг"],
+      ["reserved_stop_risk", "стоп-риск"],
+      ["candidate_stop_risk", "риск входа"],
+      ["exit_reason", "выход"]
+    ];
+    const summary = labels.flatMap(([key, label]) => {
+      const value = context[key];
+      return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+        ? [`${label}: ${String(value)}`]
+        : [];
+    });
+    const microstructure = context.microstructure;
+    if (typeof microstructure === "object" && microstructure !== null && !Array.isArray(microstructure)) {
+      const details = microstructure as Record<string, unknown>;
+      const status = details.status;
+      const sources = details.available_sources;
+      if (typeof status === "string" || typeof sources === "number") {
+        summary.push(`микро: ${typeof status === "string" ? status : "—"}, источников: ${typeof sources === "number" ? sources : "—"}`);
+      }
+    }
+    return summary;
+  }
   return (
     <section className="space-y-5">
-      <Header title="Логи" subtitle="Сигналы, торговые действия и события системы">
+      <Header title="Логи" subtitle="Причины входов и отказов, контроль риска и жизненный цикл сделок">
         <button className="btn primary" onClick={downloadTradingAudit} disabled={exporting}>
           <Download size={16} /> {exporting ? "Готовим архив" : "Выгрузить аудит сделок"}
         </button>
         <button className="btn" onClick={load}><RefreshCw size={16} /> Обновить</button>
       </Header>
       {error && <Alert tone="danger" text={error} />}
-      <Alert tone="good" text="Архив содержит все позиции, исполнения, ордера, комиссии, причины входа, голоса агентов, post-mortem и события закрытия." />
+      <Alert tone="good" text="Каждая новая торговая запись содержит событие, пару, проверку, направление и параметры риска. Раскрой «Детали» для полного контекста; он также попадает в CSV-аудит." />
       <div className="table-wrap">
         <table>
           <thead><tr><th>Время</th><th>Уровень</th><th>Сообщение</th></tr></thead>
           <tbody>
             {logs.map((log) => (
-              <tr key={log.id}><td>{new Date(log.created_at).toLocaleString()}</td><td><span className="pill">{log.level}</span></td><td>{log.message}</td></tr>
+              <tr key={log.id}>
+                <td>{new Date(log.created_at).toLocaleString()}</td>
+                <td><span className="pill">{log.level}</span></td>
+                <td>
+                  <div>{log.message}</div>
+                  {contextSummary(log.context).length > 0 && <div className="log-context-summary">{contextSummary(log.context).join(" · ")}</div>}
+                  {Object.keys(log.context).length > 0 && (
+                    <details className="log-context-details">
+                      <summary>Детали записи</summary>
+                      <pre>{JSON.stringify(log.context, null, 2)}</pre>
+                    </details>
+                  )}
+                </td>
+              </tr>
             ))}
             {!logs.length && <EmptyRow cols={3} text="Логов пока нет" />}
           </tbody>
@@ -1305,7 +1536,7 @@ function SettingsView() {
           <label className="field">Триггер безубытка R<input type="number" value={settings.breakeven_trigger_r} onChange={(event) => update("breakeven_trigger_r", Number(event.target.value))} /></label>
           <label className="field">Отступ безубытка<input type="number" value={settings.breakeven_offset_percent} onChange={(event) => update("breakeven_offset_percent", Number(event.target.value))} /></label>
           <label className="field">Частичный тейк R<input type="number" value={settings.partial_take_profit_r} onChange={(event) => update("partial_take_profit_r", Number(event.target.value))} /></label>
-          <label className="field">Частичное закрытие %<input type="number" value={settings.partial_close_percent} onChange={(event) => update("partial_close_percent", Number(event.target.value))} /></label>
+          <label className="field">TP1: частичное закрытие % (10–30)<input type="number" min="10" max="30" value={settings.partial_close_percent} onChange={(event) => update("partial_close_percent", Number(event.target.value))} /></label>
           <label className="field">Интервал скана<select value={settings.scan_interval} onChange={(event) => update("scan_interval", event.target.value)}><option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select></label>
         </div>
         <div className="panel-block">
@@ -1349,6 +1580,217 @@ function EmptyRow(props: { cols: number; text: string }) {
 
 function fmt(value: number | undefined) {
   return Number(value ?? 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+}
+
+function TradeChartsPanel() {
+  const [positions, setPositions] = React.useState<Position[]>([]);
+  const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  const [timeframe, setTimeframe] = React.useState("1h");
+  const [chart, setChart] = React.useState<TradeChart | null>(null);
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+
+  const loadPositions = React.useCallback(async () => {
+    try {
+      const { data } = await api.get<Position[]>("/positions?limit=80");
+      setPositions(data);
+      setSelectedId((current) => current && data.some((position) => position.id === current) ? current : data[0]?.id ?? null);
+    } catch (err) {
+      setError(readError(err));
+    }
+  }, []);
+
+  React.useEffect(() => void loadPositions(), [loadPositions]);
+
+  const loadChart = React.useCallback(async () => {
+    if (!selectedId) {
+      setChart(null);
+      return;
+    }
+    try {
+      setLoading(true);
+      setError("");
+      const { data } = await api.get<TradeChart>(`/positions/${selectedId}/chart?timeframe=${timeframe}`);
+      setChart(data);
+    } catch (err) {
+      setChart(null);
+      setError(readError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedId, timeframe]);
+
+  const ingestSelectedHistory = React.useCallback(async () => {
+    const position = positions.find((item) => item.id === selectedId);
+    if (!position) return;
+    try {
+      setLoading(true);
+      setError("");
+      await api.post(`/market/history/ingest?symbol=${encodeURIComponent(position.symbol)}&timeframe=${timeframe}&limit=1000`);
+      await loadChart();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadChart, positions, selectedId, timeframe]);
+
+  React.useEffect(() => void loadChart(), [loadChart]);
+  const selected = positions.find((position) => position.id === selectedId);
+
+  return (
+    <div className="panel-block trade-chart-panel">
+      <div className="trade-chart-heading">
+        <div>
+          <div className="table-title">График сделки</div>
+          <p className="muted">Сохранённые свечи и фактические уровни позиции: вход, SL, TP и безубыток.</p>
+        </div>
+        <div className="trade-chart-controls">
+          <select value={selectedId ?? ""} onChange={(event) => setSelectedId(Number(event.target.value) || null)} aria-label="Выбор сделки">
+            {!positions.length && <option value="">Сделок пока нет</option>}
+            {positions.map((position) => (
+              <option key={position.id} value={position.id}>
+                #{position.id} · {position.symbol} · {position.status === "OPEN" ? "открыта" : position.exit_reason ?? "закрыта"}
+              </option>
+            ))}
+          </select>
+          <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Таймфрейм графика">
+            <option value="1m">1 мин</option>
+            <option value="5m">5 мин</option>
+            <option value="15m">15 мин</option>
+            <option value="1h">1 час</option>
+          </select>
+          <button className="btn compact" onClick={() => void Promise.all([loadPositions(), loadChart()])} disabled={loading}>
+            <RefreshCw size={15} /> {loading ? "Загрузка" : "Обновить"}
+          </button>
+          <button className="btn compact" onClick={() => void ingestSelectedHistory()} disabled={loading || !selected}>
+            <Download size={15} /> Свечи
+          </button>
+        </div>
+      </div>
+      {error && <Alert tone="danger" text={error} />}
+      {selected && !chart && !loading && <p className="muted trade-chart-empty">Загрузка графика для {selected.symbol} не дала данных.</p>}
+      {chart && <TradePriceChart chart={chart} />}
+    </div>
+  );
+}
+
+function TradePriceChart({ chart }: { chart: TradeChart }) {
+  const geometry = React.useMemo(() => buildTradeChartGeometry(chart), [chart]);
+  const levelStyle: Record<TradeChart["levels"][number]["kind"], string> = {
+    ENTRY: "entry",
+    STOP: "stop",
+    TAKE: "take",
+    BREAKEVEN: "breakeven",
+    EXIT: "exit"
+  };
+
+  return (
+    <div className="trade-chart-body">
+      <div className="trade-chart-meta">
+        <span className={`pill ${chart.side === "LONG" ? "buy" : "sell"}`}>{translateAction(chart.side)}</span>
+        <strong>{chart.symbol}</strong>
+        <span>{chart.status === "OPEN" ? "Открытая позиция" : "Закрытая позиция"}</span>
+        <span>ТФ {chart.timeframe}</span>
+      </div>
+      {chart.candles.length > 1 ? (
+        <div className="trade-chart-canvas" role="img" aria-label={`График сделки ${chart.symbol}`}>
+          <svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id={`trade-area-${chart.position_id}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#54e8ff" stopOpacity="0.25" />
+                <stop offset="100%" stopColor="#54e8ff" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {[0.2, 0.4, 0.6, 0.8].map((fraction) => <line key={fraction} x1="0" x2={geometry.width} y1={geometry.height * fraction} y2={geometry.height * fraction} className="trade-chart-grid" />)}
+            {geometry.candles.map((candle) => (
+              <g key={candle.timestamp} className={candle.close >= candle.open ? "candle-up" : "candle-down"}>
+                <line x1={candle.x} x2={candle.x} y1={candle.highY} y2={candle.lowY} />
+                <rect x={candle.x - candle.bodyWidth / 2} y={candle.bodyY} width={candle.bodyWidth} height={Math.max(candle.bodyHeight, 1.25)} rx="0.5" />
+              </g>
+            ))}
+            <path d={geometry.areaPath} fill={`url(#trade-area-${chart.position_id})`} />
+            <path d={geometry.closePath} className="trade-close-line" />
+            {geometry.levels.map((level) => (
+              <g key={level.key} className={`trade-level ${levelStyle[level.kind]}`}>
+                <line x1="0" x2={geometry.width} y1={level.y} y2={level.y} />
+                <text x="8" y={Math.max(level.y - 4, 12)}>{level.label} ${fmt(level.price)}</text>
+              </g>
+            ))}
+            {geometry.markers.map((marker) => (
+              <g key={marker.key} className={`trade-marker ${marker.kind === "ENTRY" ? "entry" : "exit"}`}>
+                <line x1={marker.x} x2={marker.x} y1="0" y2={geometry.height} />
+                <circle cx={marker.x} cy={marker.y} r="4.5" />
+                <text x={Math.min(marker.x + 7, geometry.width - 72)} y="16">{marker.label}</text>
+              </g>
+            ))}
+          </svg>
+        </div>
+      ) : (
+        <div className="trade-chart-empty">Недостаточно сохранённых свечей для линии графика.</div>
+      )}
+      <div className="trade-chart-levels">
+        {chart.levels.map((level) => <span key={level.key} className={`trade-level-chip ${levelStyle[level.kind]}`}>{level.label}: ${fmt(level.price)}</span>)}
+      </div>
+      {chart.data_note && <p className="muted trade-chart-note">{chart.data_note}</p>}
+    </div>
+  );
+}
+
+type TradeChartGeometry = {
+  width: number;
+  height: number;
+  closePath: string;
+  areaPath: string;
+  candles: Array<{ timestamp: string; x: number; highY: number; lowY: number; bodyY: number; bodyHeight: number; bodyWidth: number; open: number; close: number }>;
+  levels: Array<{ key: string; label: string; price: number; y: number; kind: TradeChart["levels"][number]["kind"] }>;
+  markers: Array<{ key: string; label: string; kind: TradeChart["markers"][number]["kind"]; x: number; y: number }>;
+};
+
+function buildTradeChartGeometry(chart: TradeChart): TradeChartGeometry {
+  const width = 960;
+  const height = 340;
+  const prices = [...chart.candles.flatMap((candle) => [candle.high, candle.low]), ...chart.levels.map((level) => level.price), ...chart.markers.map((marker) => marker.price)].filter(Number.isFinite);
+  const rawMin = Math.min(...prices);
+  const rawMax = Math.max(...prices);
+  const span = Math.max(rawMax - rawMin, Math.max(Math.abs(rawMax) * 0.002, 0.00000001));
+  const minPrice = rawMin - span * 0.08;
+  const maxPrice = rawMax + span * 0.08;
+  const priceToY = (price: number) => height - ((price - minPrice) / (maxPrice - minPrice)) * height;
+  const lastCandle = chart.candles[chart.candles.length - 1];
+  const lastMarker = chart.markers[chart.markers.length - 1];
+  const start = new Date(chart.candles[0]?.timestamp ?? chart.markers[0]?.timestamp ?? Date.now()).getTime();
+  const end = new Date(lastCandle?.timestamp ?? lastMarker?.timestamp ?? Date.now()).getTime();
+  const timeSpan = Math.max(end - start, 1);
+  const timeToX = (value: string) => Math.max(0, Math.min(width, ((new Date(value).getTime() - start) / timeSpan) * width));
+  const bodyWidth = Math.max(1.5, Math.min(9, width / Math.max(chart.candles.length, 1) * 0.58));
+  const candles = chart.candles.map((candle) => {
+    const openY = priceToY(candle.open);
+    const closeY = priceToY(candle.close);
+    return {
+      timestamp: candle.timestamp,
+      x: timeToX(candle.timestamp),
+      highY: priceToY(candle.high),
+      lowY: priceToY(candle.low),
+      bodyY: Math.min(openY, closeY),
+      bodyHeight: Math.abs(openY - closeY),
+      bodyWidth,
+      open: candle.open,
+      close: candle.close
+    };
+  });
+  const closePath = candles.map((candle, index) => `${index ? "L" : "M"}${candle.x.toFixed(2)},${priceToY(candle.close).toFixed(2)}`).join(" ");
+  const lastCandleGeometry = candles[candles.length - 1];
+  const areaPath = closePath ? `${closePath} L${lastCandleGeometry?.x.toFixed(2)},${height} L${candles[0]?.x.toFixed(2)},${height} Z` : "";
+  return {
+    width,
+    height,
+    closePath,
+    areaPath,
+    candles,
+    levels: chart.levels.map((level) => ({ ...level, y: priceToY(level.price) })),
+    markers: chart.markers.map((marker) => ({ ...marker, x: timeToX(marker.timestamp), y: priceToY(marker.price) }))
+  };
 }
 
 function learningStageLabel(value?: LearningProgress["stage"]) {

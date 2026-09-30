@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+import pytest
+
 from app.services.backtesting import WalkForwardReport, WalkForwardWindow
 from app.services.pretrade_quality import PreTradeQualityGate
 from app.services.risk_manager import RiskSettings
@@ -138,3 +142,24 @@ def test_paper_learning_probe_still_blocks_negative_sparse_history():
 
     assert decision.allowed is False
     assert decision.risk_multiplier == 0.0
+
+
+@pytest.mark.asyncio
+async def test_pretrade_quality_blocks_entry_until_required_history_is_available(monkeypatch):
+    gate = PreTradeQualityGate()
+    gate.settings = SimpleNamespace(
+        pretrade_quality_enabled=True,
+        pretrade_quality_min_candles=420,
+        pretrade_quality_require_history=True,
+    )
+
+    async def no_history(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(gate, "_recent_candles", no_history)
+
+    decision = await gate.assess(None, "BTC/USDT", "1h", risk_settings())
+
+    assert decision.allowed is False
+    assert decision.risk_multiplier == 0.0
+    assert decision.reason.startswith("pre-trade quality blocked")

@@ -50,6 +50,44 @@ export type Position = {
   closed_at?: string | null;
 };
 
+export type TradeChartCandle = {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  source: string;
+};
+
+export type TradeChartLevel = {
+  key: string;
+  label: string;
+  price: number;
+  kind: "ENTRY" | "STOP" | "TAKE" | "BREAKEVEN" | "EXIT";
+  factual: boolean;
+};
+
+export type TradeChartMarker = {
+  key: string;
+  label: string;
+  timestamp: string;
+  price: number;
+  kind: "ENTRY" | "EXIT";
+};
+
+export type TradeChart = {
+  position_id: number;
+  symbol: string;
+  side: string;
+  status: string;
+  timeframe: string;
+  candles: TradeChartCandle[];
+  levels: TradeChartLevel[];
+  markers: TradeChartMarker[];
+  data_note?: string | null;
+};
+
 export type TradeHistoryItem = {
   id: number;
   symbol: string;
@@ -107,6 +145,70 @@ export type TradeAnalytics = {
   max_loss_streak: number;
   by_symbol: SymbolPerformance[];
   recent_trades: TradeHistoryItem[];
+};
+
+export type TradingAuditMetric = {
+  trades: number;
+  profitable: number;
+  losing: number;
+  breakeven: number;
+  win_rate: number;
+  gross_profit: number;
+  gross_loss: number;
+  net_pnl: number;
+  average_pnl: number;
+  max_drawdown: number;
+  profit_factor?: number | null;
+  average_profit?: number | null;
+  average_loss?: number | null;
+  average_duration_minutes?: number | null;
+  max_win?: number | null;
+  max_loss?: number | null;
+};
+
+export type TradingAuditDay = TradingAuditMetric & { date: string };
+
+export type TradingAuditSymbol = {
+  symbol: string;
+  trades: number;
+  win_rate: number;
+  gross_profit: number;
+  gross_loss: number;
+  net_pnl: number;
+  average_pnl: number;
+  max_loss?: number | null;
+  max_win?: number | null;
+  profit_factor?: number | null;
+};
+
+export type TradingAudit = {
+  generated_at: string;
+  timezone: string;
+  period: Record<string, string | number>;
+  data_quality: Record<string, string | number | null>;
+  total: TradingAuditMetric;
+  daily_results: TradingAuditDay[];
+  daily_analysis: Record<string, unknown>;
+  time_sequence: Record<string, unknown>;
+  before_after_changes: Record<string, unknown>;
+  by_symbol: TradingAuditSymbol[];
+  top_symbols: { positive: TradingAuditSymbol[]; negative: TradingAuditSymbol[] };
+  loss_causes: Record<string, unknown>;
+  entry_analysis: Record<string, unknown>;
+  take_profit: Record<string, unknown>;
+  stop_loss: Record<string, unknown>;
+  capital_and_risk: Record<string, unknown>;
+  position_correlation: Record<string, unknown>;
+  streaks: Record<string, unknown>;
+  decision_algorithm: Record<string, unknown>;
+  external_sources: { sources?: Array<Record<string, unknown>>; answer?: string; technical_only_entry?: boolean };
+  limitations: Array<{ area: string; message: string }>;
+  final_15: Array<{ question: string; answer: unknown }>;
+  final_conclusion: {
+    what_works: Array<{ statement: string; evidence: string }>;
+    what_does_not_work: Array<{ statement: string; evidence: string }>;
+    check_first: Array<{ problem: string; evidence: string; expected_impact: string; required_data: string }>;
+  };
 };
 
 export type Order = {
@@ -598,5 +700,6 @@ export type LogEntry = {
   id: number;
   level: string;
   message: string;
+  context: Record<string, unknown>;
   created_at: string;
 };

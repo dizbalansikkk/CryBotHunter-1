@@ -41,6 +41,22 @@ def test_walk_forward_returns_window_summary():
     assert report.windows[0].parameters["risk_per_trade"] == 10.0
 
 
+def test_walk_forward_warms_test_window_without_trading_the_training_slice(monkeypatch):
+    service = BacktestingService()
+    observed_calls: list[tuple[int, int]] = []
+    original_run = service.run
+
+    def observe_run(test_candles, *args, **kwargs):
+        observed_calls.append((len(test_candles), kwargs.get("trade_start_index", 0)))
+        return original_run(test_candles, *args, **kwargs)
+
+    monkeypatch.setattr(service, "run", observe_run)
+
+    service.walk_forward(candles(520), train_size=260, test_size=120, step_size=120)
+
+    assert (340, 220) in observed_calls
+
+
 def test_backtest_cost_model_reduces_trade_profit():
     service = BacktestingService()
     position = {"side": "LONG", "entry": 100.0, "volume": 2.0}

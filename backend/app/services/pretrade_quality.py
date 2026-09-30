@@ -47,11 +47,16 @@ class PreTradeQualityGate:
                 candles = fallback_candles
                 used_timeframe = "1h"
         if len(candles) < self.settings.pretrade_quality_min_candles:
+            allowed = not self.settings.pretrade_quality_require_history
+            state = "warning" if allowed else "blocked"
             return PreTradeQualityAssessment(
-                True,
-                f"pre-trade quality warning: only {len(candles)} {used_timeframe} candles available, need {self.settings.pretrade_quality_min_candles}",
+                allowed,
+                (
+                    f"pre-trade quality {state}: only {len(candles)} {used_timeframe} candles available, "
+                    f"need {self.settings.pretrade_quality_min_candles}"
+                ),
                 len(candles),
-                risk_multiplier=self.settings.pretrade_quality_min_risk_multiplier,
+                risk_multiplier=self.settings.pretrade_quality_min_risk_multiplier if allowed else 0.0,
             )
 
         train_size = max(220, min(360, len(candles) // 2))

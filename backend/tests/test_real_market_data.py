@@ -65,10 +65,11 @@ def test_strong_spot_setup_can_reach_tradeable_rating_without_open_interest():
             "symbol": "BTC/USDT",
             "price": 110.0,
             "volume_24h": 3_000_000_000.0,
+            "volume_average_24h": 2_000_000_000.0,
             "price_change_percent": 4.0,
             "atr": 3.0,
             "rsi": 62.0,
-            "ema20": 105.0,
+            "ema20": 106.0,
             "ema50": 100.0,
             "ema200": 90.0,
             "macd": 10.0,
@@ -92,10 +93,11 @@ def test_adaptive_liquidity_rating_keeps_clean_altcoin_setup_tradeable():
             "symbol": "AAVE/USDT",
             "price": 110.0,
             "volume_24h": 20_000_000.0,
+            "volume_average_24h": 15_000_000.0,
             "price_change_percent": 2.0,
             "atr": 2.5,
             "rsi": 62.0,
-            "ema20": 105.0,
+            "ema20": 107.0,
             "ema50": 100.0,
             "ema200": 95.0,
             "macd": 1.0,
@@ -133,6 +135,37 @@ async def test_real_scanner_does_not_hide_exchange_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="exchange unavailable"):
         await MarketScanner(FailingExchange()).scan(["BTC/USDT"])
+
+
+@pytest.mark.asyncio
+async def test_scanner_uses_only_closed_candles_for_indicators():
+    class Exchange:
+        async def fetch_ohlcv(self, _symbol, timeframe="1h", limit=250):
+            assert timeframe == "1h"
+            assert limit == 250
+            candles = [[index, 100, 101, 99, 100, 10] for index in range(250)]
+            candles[-1] = [249, 100, 10_000, 1, 9_999, 1_000]
+            return candles
+
+    class Context:
+        async def get_market_context(self, frame):
+            assert len(frame) == 249
+            assert float(frame.iloc[-1]["close"]) == 100
+            return SimpleNamespace(atr=2.0, rsi=60.0, sma=100.0, as_dict=lambda: {"source": "test"})
+
+    scanner = MarketScanner(Exchange())
+    scanner.context_manager = Context()
+
+    def indicators(frame):
+        for column, value in {"ema20": 101, "ema50": 100, "ema200": 90, "macd": 1}.items():
+            frame[column] = value
+        return frame
+
+    scanner.calculate_indicators = indicators
+    coin = await scanner._scan_ccxt_symbol("BTC/USDT", {"last": 100, "quoteVolume": 1_000_000_000})
+
+    assert coin is not None
+    assert coin.ema20 == 101
 
 
 @pytest.mark.asyncio

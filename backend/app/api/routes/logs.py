@@ -25,11 +25,22 @@ async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depe
         LogEntry.message.ilike("Opened % position for %"),
         LogEntry.message.ilike("Closed %"),
         LogEntry.message.ilike("Partially closed %"),
+        LogEntry.message.ilike("Dynamic take profit extended%"),
+        LogEntry.message.ilike("Dynamic take profit failed%"),
         LogEntry.message.ilike("Moved % stop to breakeven%"),
         LogEntry.message.ilike("Failed to close %"),
         LogEntry.message.ilike("Failed partial take profit %"),
         LogEntry.message.ilike("Post-mortem %"),
         LogEntry.message.ilike("Learning updated from %"),
+        LogEntry.message.ilike("Skipped %"),
+        LogEntry.message.ilike("Performance guard blocked entries%"),
+        LogEntry.message.ilike("AI committee %"),
+        LogEntry.message.ilike("Position % cannot be managed: price unavailable"),
+        LogEntry.message.ilike("Position ticker snapshot failed%"),
+        LogEntry.message.ilike("Position market snapshot failed%"),
+        LogEntry.message.ilike("Position management paused%"),
+        LogEntry.message.ilike("Order % partially filled during reconciliation%"),
+        LogEntry.message.ilike("Order % marked failed during reconciliation"),
     )
     events = list(
         (await db.execute(select(LogEntry).where(event_filter).order_by(LogEntry.created_at.asc()))).scalars().all()

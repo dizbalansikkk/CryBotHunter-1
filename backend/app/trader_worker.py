@@ -88,8 +88,8 @@ async def main() -> None:
                             exchange = ExchangeClient.from_user_settings(user_settings)
                             trading_engine = TradingEngine(exchange, control=control)
                             reconciliation = OrderReconciliationService(exchange)
-                            tick = await trading_engine.manage_open_positions(db)
                             await reconciliation.reconcile(db)
+                            tick = await trading_engine.manage_open_positions(db)
                             paused, reason = await control.is_paused()
                             if paused:
                                 logger.warning("Trader worker entry scan paused: %s", reason)

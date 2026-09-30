@@ -20,6 +20,7 @@ class SignalType(str, Enum):
 
 class OrderStatus(str, Enum):
     NEW = "NEW"
+    PARTIAL = "PARTIAL"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
@@ -58,7 +59,7 @@ class UserSettings(Base):
     breakeven_trigger_r: Mapped[float] = mapped_column(Float, default=1.0)
     breakeven_offset_percent: Mapped[float] = mapped_column(Float, default=0.05)
     partial_take_profit_r: Mapped[float] = mapped_column(Float, default=1.0)
-    partial_close_percent: Mapped[float] = mapped_column(Float, default=50.0)
+    partial_close_percent: Mapped[float] = mapped_column(Float, default=25.0)
 
     user: Mapped[User] = relationship(back_populates="settings")
 
@@ -79,7 +80,7 @@ class Position(Base):
     breakeven_trigger_r: Mapped[float] = mapped_column(Float, default=1.0)
     breakeven_offset_percent: Mapped[float] = mapped_column(Float, default=0.05)
     partial_take_profit_r: Mapped[float] = mapped_column(Float, default=1.0)
-    partial_close_percent: Mapped[float] = mapped_column(Float, default=50.0)
+    partial_close_percent: Mapped[float] = mapped_column(Float, default=25.0)
     partial_taken: Mapped[bool] = mapped_column(Boolean, default=False)
     trailing_stop_percent: Mapped[float] = mapped_column(Float, default=0.0)
     highest_price: Mapped[float] = mapped_column(Float, default=0.0)
@@ -276,6 +277,7 @@ class LogEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     level: Mapped[str] = mapped_column(String(16), index=True)
     message: Mapped[str] = mapped_column(Text)
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

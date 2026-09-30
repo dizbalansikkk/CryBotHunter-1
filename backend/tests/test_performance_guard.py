@@ -99,6 +99,44 @@ async def test_guard_ignores_paper_learning_outcomes(monkeypatch):
     assert report.total_profit == 3
 
 
+@pytest.mark.asyncio
+async def test_symbol_guard_quarantines_a_statistically_weak_pair(monkeypatch):
+    service = PerformanceGuardService()
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    settings = service_settings(monkeypatch)
+    settings.symbol_guard_cooldown_hours = 24
+    rows = [(-2.0, now - timedelta(hours=2), {}) for _ in range(5)]
+
+    report = await service.evaluate_symbol(Db(rows), "SOL/USDT", now=now)
+
+    assert report.allowed is False
+    assert report.retry_at == now + timedelta(hours=22)
+    assert "symbol performance guard SOL/USDT" in report.reason
+
+
+@pytest.mark.asyncio
+async def test_symbol_guard_allows_reduced_risk_probe_after_quarantine(monkeypatch):
+    service = PerformanceGuardService()
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    settings = service_settings(monkeypatch)
+    settings.symbol_guard_cooldown_hours = 24
+    settings.symbol_guard_recovery_risk_multiplier = 0.2
+    rows = [
+        (1.0, now - timedelta(hours=2), {}),
+        (-2.0, now - timedelta(hours=25), {}),
+        (-2.0, now - timedelta(hours=26), {}),
+        (-2.0, now - timedelta(hours=27), {}),
+        (-2.0, now - timedelta(hours=28), {}),
+    ]
+
+    report = await service.evaluate_symbol(Db(rows), "SOL/USDT", now=now)
+
+    assert report.allowed is True
+    assert report.recovery_mode is True
+    assert report.risk_multiplier == 0.2
+    assert "symbol recovery probe" in report.reason
+
+
 def service_settings(monkeypatch):
     from app.core.config import get_settings
 
@@ -110,4 +148,10 @@ def service_settings(monkeypatch):
     monkeypatch.setattr(settings, "guard_recovery_enabled", True)
     monkeypatch.setattr(settings, "guard_recovery_cooldown_hours", 6.0)
     monkeypatch.setattr(settings, "guard_recovery_risk_multiplier", 0.25)
+    monkeypatch.setattr(settings, "symbol_guard_enabled", True)
+    monkeypatch.setattr(settings, "symbol_guard_min_trades", 5)
+    monkeypatch.setattr(settings, "symbol_guard_min_win_rate", 40.0)
+    monkeypatch.setattr(settings, "symbol_guard_min_total_profit", 0.0)
+    monkeypatch.setattr(settings, "symbol_guard_cooldown_hours", 24.0)
+    monkeypatch.setattr(settings, "symbol_guard_recovery_risk_multiplier", 0.25)
     return settings

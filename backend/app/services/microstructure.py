@@ -189,6 +189,14 @@ class EntryGatekeeper:
             return EntryGateAssessment(False, f"macro gate blocked {signal} against {coin.regime}", 0.0, 0.0, snapshot)
 
         if snapshot.get("status") == "UNAVAILABLE":
+            if getattr(self.settings, "entry_microstructure_require_data", True):
+                return EntryGateAssessment(
+                    False,
+                    "micro gate blocked: no usable entry microstructure data",
+                    0.0,
+                    0.0,
+                    snapshot,
+                )
             multiplier = max(min(float(self.settings.entry_microstructure_fail_open_risk_multiplier), 1.0), 0.0)
             return EntryGateAssessment(
                 True,
@@ -219,10 +227,33 @@ class EntryGatekeeper:
             momentum = direction * float(snapshot.get("price_change_10m_percent") or 0.0)
             supports.append(0.08 if momentum > 0 else -0.08 if momentum < 0 else 0.0)
             labels.append("momentum")
-        if not supports:
+        required_sources = min(
+            max(int(getattr(self.settings, "entry_microstructure_min_sources", 2)), 1),
+            3,
+        )
+        if len(supports) < required_sources:
+            if getattr(self.settings, "entry_microstructure_require_data", True):
+                return EntryGateAssessment(
+                    False,
+                    (
+                        "micro gate blocked: insufficient independent sources "
+                        f"{len(supports)}/{required_sources}"
+                    ),
+                    0.0,
+                    0.0,
+                    snapshot,
+                )
             multiplier = max(min(float(self.settings.entry_microstructure_fail_open_risk_multiplier), 1.0), 0.0)
-            return EntryGateAssessment(True, "macro gate passed; no usable micro votes", multiplier, 0.0, snapshot)
-
+            return EntryGateAssessment(
+                True,
+                (
+                    "micro data incomplete "
+                    f"{len(supports)}/{required_sources}; risk reduced to {multiplier:.2f}x"
+                ),
+                multiplier,
+                0.0,
+                snapshot,
+            )
         agreeing = sum(value >= 0.05 for value in supports)
         opposing = sum(value <= -0.15 for value in supports)
         consensus = agreeing / len(supports)
@@ -230,6 +261,14 @@ class EntryGatekeeper:
         if opposing >= 2:
             return EntryGateAssessment(False, f"micro gate blocked strong opposing flow ({detail})", 0.0, consensus, snapshot)
         if consensus < float(self.settings.entry_microstructure_min_consensus):
+            if not getattr(self.settings, "entry_microstructure_neutral_entries_enabled", False):
+                return EntryGateAssessment(
+                    False,
+                    f"micro gate blocked insufficient directional consensus {consensus:.0%} ({detail})",
+                    0.0,
+                    consensus,
+                    snapshot,
+                )
             multiplier = max(min(float(self.settings.entry_microstructure_neutral_risk_multiplier), 1.0), 0.0)
             return EntryGateAssessment(
                 True,

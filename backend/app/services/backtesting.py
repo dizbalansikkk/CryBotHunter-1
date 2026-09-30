@@ -64,6 +64,7 @@ class BacktestingService:
         trailing_stop_percent: float = 0.0,
         fee_rate: float | None = None,
         slippage_bps: float | None = None,
+        trade_start_index: int = 0,
     ) -> BacktestReport:
         if len(candles) < 220:
             return self.summarize([])
@@ -81,6 +82,9 @@ class BacktestingService:
                 for item in candles
             ]
         )
+        # Keep the original candle number so a caller can provide historical
+        # candles for indicator warm-up without allowing trades in that period.
+        frame["source_index"] = frame.index
         frame = self.scanner.calculate_indicators(frame).dropna().reset_index(drop=True)
         frame["volume_average"] = frame["volume"].rolling(20, min_periods=1).mean()
         profits: list[float] = []
@@ -122,6 +126,9 @@ class BacktestingService:
                         position = None
                 if position:
                     continue
+
+            if int(row["source_index"]) < max(int(trade_start_index), 0):
+                continue
 
             average_volume = float(frame["volume"].rolling(20).mean().iloc[int(row.name)] or row["volume"])
             coin = MarketCoin(
@@ -176,7 +183,17 @@ class BacktestingService:
             train = candles[start : start + train_size]
             test = candles[start + train_size : start + train_size + test_size]
             parameters, train_report = self._best_parameters(train)
-            test_report = self.run(test, **parameters)
+            # The strategy relies on long-lookback indicators (EMA200). A
+            # standalone 80-160 candle test slice cannot produce a comparable
+            # signal, so warm it with trailing training candles. Entries are
+            # explicitly disabled in the warm-up portion to keep the test
+            # strictly out-of-sample.
+            warmup = train[-220:]
+            test_report = self.run(
+                [*warmup, *test],
+                **parameters,
+                trade_start_index=len(warmup),
+            )
             windows.append(
                 WalkForwardWindow(
                     index=index,

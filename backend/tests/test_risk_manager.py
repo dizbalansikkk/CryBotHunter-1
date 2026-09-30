@@ -75,6 +75,32 @@ def test_risk_blocks_nan_daily_pnl():
     assert reason == "invalid risk inputs"
 
 
+def test_daily_risk_reserve_blocks_combined_open_stop_risk_over_limit():
+    accepted, reason = RiskManager().can_add_daily_risk_reserve(
+        balance=1000,
+        daily_risk_percent=3,
+        daily_pnl=-5,
+        reserved_open_stop_risk=15,
+        candidate_stop_risk=12,
+    )
+
+    assert accepted is False
+    assert "would exceed limit" in reason
+
+
+def test_daily_risk_reserve_allows_entry_at_remaining_budget():
+    accepted, reason = RiskManager().can_add_daily_risk_reserve(
+        balance=1000,
+        daily_risk_percent=3,
+        daily_pnl=-5,
+        reserved_open_stop_risk=15,
+        candidate_stop_risk=10,
+    )
+
+    assert accepted is True
+    assert reason == "daily risk reserve accepted"
+
+
 def test_position_size_uses_loss_budget():
     size = RiskManager().position_size(balance=1000, risk_percent=1, entry_price=100, stop_price=98)
     assert size == 5

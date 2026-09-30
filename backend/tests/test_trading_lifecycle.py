@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.entities import Position
+from app.models.entities import LogEntry, Order, OrderStatus, Position
 from app.schemas.dto import AgentAnalysisOut, AgentDecisionOut, MarketCoin, StrategySignal
 from app.services.performance_guard import PerformanceGuardReport
 from app.services.risk_manager import RiskSettings
@@ -144,6 +144,71 @@ def test_opportunity_ranking_prefers_tradeable_high_confidence_signal():
     assert engine._opportunity_rank(coin(), buy) > engine._opportunity_rank(coin(), wait)
 
 
+def test_trading_event_log_has_machine_readable_context():
+    class Db:
+        def __init__(self) -> None:
+            self.items = []
+
+        def add(self, item) -> None:
+            self.items.append(item)
+
+    db = Db()
+    TradingEngine()._log_trading_event(
+        db,
+        "INFO",
+        "ENTRY_SKIPPED",
+        "Skipped BTC/USDT: test",
+        gate="PRETRADE_QUALITY",
+        cycle_id="cycle123",
+        optional=None,
+    )
+
+    assert len(db.items) == 1
+    assert isinstance(db.items[0], LogEntry)
+    assert db.items[0].context == {
+        "event": "ENTRY_SKIPPED",
+        "gate": "PRETRADE_QUALITY",
+        "cycle_id": "cycle123",
+    }
+
+
+def test_entry_log_context_keeps_market_and_microstructure_evidence():
+    signal = StrategySignal(symbol="BTC/USDT", signal="BUY", score=88, reasons=["trend", "volume"])
+    context = TradingEngine()._entry_log_context(
+        coin(),
+        signal,
+        {
+            "status": "READY",
+            "available_sources": 3,
+            "order_book_imbalance": 0.4,
+            "trade_flow_imbalance": 0.3,
+            "ignored": "not persisted in log context",
+        },
+    )
+
+    assert context["signal_reasons"] == ["trend", "volume"]
+    assert context["market"]["volume_average_24h"] == 0
+    assert context["microstructure"] == {
+        "status": "READY",
+        "available_sources": 3,
+        "order_book_imbalance": 0.4,
+        "trade_flow_imbalance": 0.3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("reason", "gate"),
+    [
+        ("symbol performance guard BTC/USDT: cooldown", "SYMBOL_GUARD"),
+        ("daily risk reserve would exceed limit", "DAILY_RISK_BUDGET"),
+        ("pre-trade quality blocked: no data", "PRETRADE_QUALITY"),
+        ("strategy WAIT score=70: volume confirmation missing", "VOLUME_CONFIRMATION"),
+    ],
+)
+def test_decision_gate_classifies_trade_rejections(reason: str, gate: str):
+    assert TradingEngine()._decision_gate(reason) == gate
+
+
 def test_exposure_gate_rejects_overloaded_portfolio():
     engine = TradingEngine()
     accepted, reason, candidate = engine._exposure_gate(
@@ -156,6 +221,48 @@ def test_exposure_gate_rejects_overloaded_portfolio():
     assert accepted is False
     assert reason == "gross exposure limit reached"
     assert candidate > 0
+
+
+def test_daily_risk_gate_reserves_open_stop_distance_before_new_entry():
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(daily_risk_reserve_enabled=True)
+    settings = risk_settings()
+    settings.daily_risk_percent = 1
+
+    accepted, reason, candidate_risk = engine._daily_risk_gate(
+        coin(),
+        "BUY",
+        balance=1000,
+        settings=settings,
+        daily_pnl=0,
+        reserved_open_stop_risk=3,
+    )
+
+    assert candidate_risk == 7.5
+    assert accepted is False
+    assert "daily risk reserve" in reason
+
+
+def test_stop_risk_only_reserves_remaining_distance_to_stop():
+    position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=102,
+        volume=2,
+        stop=100,
+        take=110,
+    )
+
+    assert TradingEngine()._position_stop_risk(position) == 4
+
+
+def test_ticker_price_fallback_uses_conservative_side_of_spread():
+    engine = TradingEngine()
+
+    assert engine._ticker_price({"bid": 99, "ask": 101}, "LONG") == 99
+    assert engine._ticker_price({"bid": 99, "ask": 101}, "SHORT") == 101
+    assert engine._ticker_price({"last": 100, "bid": 99, "ask": 101}, "LONG") == 100
 
 
 def test_exit_plan_uses_atr_risk_when_larger_than_percent_stop():
@@ -171,7 +278,7 @@ def test_exit_plan_uses_atr_risk_when_larger_than_percent_stop():
     assert take == 109
 
 
-def test_breakeven_moves_long_stop_after_trigger():
+def test_breakeven_moves_long_stop_past_round_trip_costs_after_trigger():
     position = Position(
         symbol="BTC/USDT",
         side="LONG",
@@ -186,17 +293,43 @@ def test_breakeven_moves_long_stop_after_trigger():
         breakeven_offset_percent=0.05,
         partial_take_profit_r=1,
         partial_close_percent=50,
-        partial_taken=False,
+        partial_taken=True,
         trailing_stop_percent=0.8,
         highest_price=105,
         lowest_price=100,
     )
 
-    applied = TradingEngine()._apply_breakeven(position)
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(
+        paper_trading=True,
+        paper_fee_rate=0.0004,
+        paper_slippage_bps=2.0,
+    )
+
+    applied = engine._apply_breakeven(position)
 
     assert applied is True
     assert position.breakeven_applied is True
-    assert position.stop == 100.05
+    # 0.05% configured offset is raised to 0.10%: 4 bps entry fee,
+    # 4 bps expected exit fee, and 2 bps expected exit slippage.
+    assert position.stop == 100.1
+    assert position.entry_context["breakeven_protection"]["effective_offset_percent"] == 0.1
+    assert engine._exit_reason(position) is None
+
+
+def test_breakeven_stop_is_reported_separately_from_a_loss_stop():
+    position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=100.1,
+        volume=1,
+        stop=100.1,
+        take=110,
+        breakeven_applied=True,
+    )
+
+    assert TradingEngine()._exit_reason(position) == "BREAKEVEN_STOP"
 
 
 def test_partial_take_profit_reaches_trigger_and_sizes_close():
@@ -219,8 +352,63 @@ def test_partial_take_profit_reaches_trigger_and_sizes_close():
     engine = TradingEngine()
 
     assert engine._partial_take_profit_reached(position, 104)
-    assert engine._partial_close_volume(position) == 1
+    # Scale-out is constrained to 10–30% so a small remainder cannot become
+    # an exchange-invalid dust order at the later targets.
+    assert engine._partial_close_volume(position) == 0.6
     assert engine._profit_for_volume(position, 104, 1) == 4
+
+
+def test_tp1_uses_cost_aware_break_even_price_and_not_one_r_trigger():
+    position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=100.1,
+        volume=1,
+        stop=96,
+        take=108,
+        entry_context={"entry_execution": {"fee": 0.04, "volume": 1}},
+    )
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(paper_fee_rate=0.0004, breakeven_slippage_buffer_bps=2.0)
+
+    assert engine._break_even_price(position) == 100.1
+    assert engine._partial_take_profit_reached(position, 100.1) is True
+    assert engine._partial_take_profit_reached(position, 100.09) is False
+
+
+@pytest.mark.asyncio
+async def test_scale_out_is_cancelled_before_an_invalid_small_tp_order_is_sent():
+    class Db:
+        def __init__(self):
+            self.items = []
+
+        def add(self, item):
+            self.items.append(item)
+
+    position = Position(
+        id=12,
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=100.1,
+        volume=0.04,
+        stop=96,
+        take=108,
+        partial_close_percent=25,
+        entry_context={"scale_out": {"mode": "CASCADE", "tp1_price": 100.1}},
+    )
+    engine = TradingEngine()
+    engine.execution = SimpleNamespace(
+        assess_exit_size=lambda *_args, **_kwargs: _rejected_exit_size(),
+        execute_market=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("small order must not be sent")),
+    )
+
+    closed = await engine._apply_partial_take_profit(Db(), position, 100.1, cycle_id="cycle")
+
+    assert closed == 0
+    assert position.entry_context["scale_out"]["mode"] == "MONOLITHIC"
+    assert position.entry_context["scale_out"]["cancelled_at_stage"] == "TP1"
 
 
 def test_total_closed_profit_includes_partial_profit_and_entry_fee():
@@ -252,6 +440,120 @@ def test_total_closed_profit_includes_partial_profit_and_entry_fee():
 
     assert final_trade_profit == 5.86
     assert total_profit == 9.81
+
+
+def test_dynamic_take_profit_locks_one_atr_step_without_widening_the_stop():
+    position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=106,
+        volume=1,
+        stop=100.5,
+        take=106,
+        initial_risk=3,
+        entry_context={"exit_plan": {"entry_atr": 2, "atr_stop_multiplier": 1.5}},
+    )
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(dynamic_take_profit_extension_atr=1.5)
+
+    next_stop, next_take, distance = engine._dynamic_take_levels(position, 106)
+
+    assert distance == 3
+    assert next_stop == 103
+    assert next_take == 109
+
+
+def test_dynamic_take_profit_uses_initial_risk_for_a_legacy_position_without_atr_context():
+    position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=106,
+        volume=1,
+        stop=100.5,
+        take=106,
+        initial_risk=3,
+        entry_context={},
+    )
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(dynamic_take_profit_extension_atr=1.5)
+
+    _next_stop, _next_take, distance = engine._dynamic_take_levels(position, 106)
+
+    assert distance == 3
+
+
+@pytest.mark.asyncio
+async def test_dynamic_take_profit_realises_part_and_moves_both_protection_levels(monkeypatch):
+    class Db:
+        def __init__(self):
+            self.items = []
+
+        def add(self, item):
+            self.items.append(item)
+
+    position = Position(
+        id=11,
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=100,
+        current_price=106,
+        volume=1,
+        stop=100.1,
+        take=106,
+        initial_risk=3,
+        entry_context={"exit_plan": {"entry_atr": 2, "atr_stop_multiplier": 1.5}},
+    )
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(
+        dynamic_take_profit_enabled=True,
+        dynamic_take_profit_max_extensions=2,
+        dynamic_take_profit_partial_close_percent=35,
+        dynamic_take_profit_extension_atr=1.5,
+        telegram_trade_reports_enabled=False,
+    )
+    engine.execution = SimpleNamespace(
+        execute_market=_confirmed_dynamic_take_order(
+            Order(
+                status=OrderStatus.FILLED.value,
+                requested_amount=0.35,
+                filled_amount=0.35,
+                average_price=106,
+                fee=0.02,
+            )
+        ),
+        assess_exit_size=_accepted_exit_size,
+    )
+
+    async def record_partial(_db, target, **_kwargs):
+        target.volume = 0.65
+        target.pnl = 2.08
+        return 0.35, 2.08
+
+    monkeypatch.setattr(engine, "_record_partial_exit", record_partial)
+
+    outcome = await engine._handle_dynamic_take_profit(Db(), position, 106, cycle_id="cycle")
+
+    assert outcome == "EXTENDED"
+    assert position.stop == 103
+    assert position.take == 109
+    assert position.entry_context["dynamic_take_profit"]["extensions"] == 1
+
+
+def _confirmed_dynamic_take_order(order):
+    async def execute_market(*_args, **_kwargs):
+        return order
+
+    return execute_market
+
+
+async def _accepted_exit_size(*_args, **_kwargs):
+    return SimpleNamespace(allowed=True)
+
+
+async def _rejected_exit_size(*_args, **_kwargs):
+    return SimpleNamespace(allowed=False, minimum_notional=5.0, notional=1.0, reason="notional below minimum")
 
 
 def test_trading_engine_rebases_risk_settings_to_actual_balance():

@@ -137,7 +137,7 @@ TRADER_LOOP_SECONDS=60
 TELEGRAM_TRADE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORTS_ENABLED=true
 TELEGRAM_CYCLE_REPORT_INTERVAL_MINUTES=15
-PAPER_EXPLORATION_ENABLED=true
+PAPER_EXPLORATION_ENABLED=false
 PAPER_EXPLORATION_MIN_SCORE=60
 PAPER_EXPLORATION_RISK_PERCENT=0.15
 PAPER_EXPLORATION_MAX_RISK_PERCENT=0.15
@@ -197,7 +197,19 @@ STRATEGY_OPTIMIZER_TOP_N=5
 
 `PAPER_TRADING=true` controls order execution only. Paper orders and balances remain virtual while `MARKET_DATA_MODE=ccxt` reads real public exchange prices and candles. The legacy value `MARKET_DATA_MODE=paper` is treated as the same real public feed for backward compatibility. Synthetic data is available only with the explicit value `MARKET_DATA_MODE=synthetic` and must never be used by the RL trainer.
 
-`PAPER_EXPLORATION_ENABLED=true` enables a separate paper-only learning lane when the strict strategy returns `WAIT`. A candidate must clear the score threshold, a decisive indicator vote, market-quality, walk-forward, RL, cooldown, exposure, daily-loss, and drawdown gates. The lane can keep learning while the regular performance guard is cooling down, but it has independent recovery slots, obeys the configured `PAPER_EXPLORATION_MAX_PER_CYCLE` cap, and is hard-capped by `PAPER_EXPLORATION_MAX_RISK_PERCENT` even when an older deployment variable requests more risk. Every candidate and final allow/block result is recorded as `PaperLearningScout` and `PaperLearningRiskGate` agent activity. Exploratory outcomes update learning memory but do not distort the regular-strategy performance guard.
+`PAPER_EXPLORATION_ENABLED=true` enables a separate paper-only learning lane when the strict strategy returns `WAIT`. It is disabled by default because it deliberately samples weaker setups. A candidate must clear the score threshold, a decisive indicator vote, market-quality, walk-forward, RL, cooldown, exposure, daily-loss, and drawdown gates. The lane can keep learning while the regular performance guard is cooling down, but it has independent recovery slots, obeys the configured `PAPER_EXPLORATION_MAX_PER_CYCLE` cap, and is hard-capped by `PAPER_EXPLORATION_MAX_RISK_PERCENT` even when an older deployment variable requests more risk. Every candidate and final allow/block result is recorded as `PaperLearningScout` and `PaperLearningRiskGate` agent activity. Exploratory outcomes update learning memory but do not distort the regular-strategy performance guard.
+
+The strict strategy requires current 24-hour quote volume to reach `STRATEGY_MIN_VOLUME_RATIO` of its rolling 24-hour average (default `1.05`) and rejects entries further than `STRATEGY_MAX_ENTRY_DISTANCE_ATR` from EMA20 (default `1.5`). This avoids treating missing volume history as confirmation or chasing an already extended move.
+
+Live entry indicators use fully closed hourly candles; the active candle cannot create a temporary EMA, RSI, or MACD signal.
+
+`SYMBOL_GUARD_*` adds a pair-level quarantine. After at least five closed trades, a pair whose recent win rate falls below 40% or whose recent net PnL is negative is paused for 24 hours. Its first retry is capped at 25% of normal risk, while healthy pairs remain eligible.
+
+`DYNAMIC_TAKE_PROFIT_*` turns the initial ATR/R:R take-profit into a conservative profit ladder. At each reached target the bot closes `DYNAMIC_TAKE_PROFIT_PARTIAL_CLOSE_PERCENT` of the remaining position, locks the stop one ATR-based step behind the realised target, and moves the next target forward by that same step. The stop can only tighten; after `DYNAMIC_TAKE_PROFIT_MAX_EXTENSIONS` the remaining volume closes at the target. Set `DYNAMIC_TAKE_PROFIT_ENABLED=false` to retain a fixed final take-profit.
+
+The first scale-out is now a cost-aware TP1: `Price_BU = Price_Entry × (1 + entry fee rate + expected exit fee rate + BREAKEVEN_SLIPPAGE_BUFFER_BPS / 10,000)` for a long (the signs are reversed for a short). It closes 10–30% only after the exchange confirms the fill, then moves the stop to that same Price_BU. TP2 closes 30–40% at `SCALE_OUT_TP2_DISTANCE_PERCENT` from entry until a persisted support/resistance detector is available; TP3 remains the ATR/strategy target. Before each partial order, the engine checks exchange precision, min amount, exchange min cost, and `MIN_EXIT_NOTIONAL_USDT`. If a partial is too small, it sends no invalid API order and preserves one monolithic final TP instead. For Binance, OKX and Bybit derivatives, an active reduce-only stop is cancelled and replaced after every confirmed TP/stop update; the new exchange order ID is recorded before it is trusted. If replacement is not confirmed by `PROTECTIVE_STOP_REPLACE_TIMEOUT_SECONDS`, the local monitor sends a market exit only when price returns to the protected stop. Spot mode deliberately retains that local monitor, because a generic spot stop cannot safely be reduce-only. Stop-fill logs retain actual execution slippage in the trade context and structured learning event; one observation does not automatically alter a live slippage buffer.
+
+`DAILY_RISK_RESERVE_ENABLED=true` reserves the distance from every open position to its current stop, plus the candidate's planned stop loss, before a new entry is allowed. The bot rejects an entry if the worst case of all stops would exceed the configured daily-risk budget.
 
 For exchange testnet execution, set `PAPER_TRADING=false`, `LIVE_TRADING_ENABLED=true`, and keep `EXCHANGE_SANDBOX_ENABLED=true`. Keep `ALLOW_LIVE_TRADING_WITHOUT_SANDBOX=false` until live execution is reviewed, tested, and deliberately approved.
 
@@ -275,7 +287,11 @@ Every new model starts as `SHADOW`, even after it passes chronological validatio
 
 RL training uses curriculum stages when clean contiguous trend and normal-volatility windows are available, then finishes on the complete market history. The reward function separates financial outcome from behavior: it penalizes churn, giving back an established unrealized edge, and holding through repeated adverse confirmation; it gives a small credit for strategy-aligned actions and disciplined invalidation exits. Loss post-mortems are replay-weighted in later training, capped by `BAD_REPLAY_MAX_WEIGHT` so one mistake cannot dominate the whole dataset.
 
-Entry execution uses a two-level gatekeeper. The macro gate enforces market regime and direction; the micro gate reads public order-book depth, recent trades, spread, 10-minute momentum, and a clearly labelled iceberg proxy. Strong opposing book+tape flow blocks the entry, neutral or unavailable micro data reduces risk, and supportive consensus keeps normal risk. Configure it with `ENTRY_MICROSTRUCTURE_*`; `AI_COMMITTEE_MIN_CONSENSUS` defaults to `0.75`.
+Entry execution uses a two-level gatekeeper. The macro gate enforces market regime and direction; the micro gate reads public order-book depth, recent trades, spread, 10-minute momentum, and a clearly labelled iceberg proxy. By default, an unavailable feed, fewer than two independent microstructure sources (`ENTRY_MICROSTRUCTURE_MIN_SOURCES=2`), or insufficient directional consensus blocks the entry; this prevents blind entries during exchange/API degradation and confirmation from a single noisy source. `ENTRY_MICROSTRUCTURE_REQUIRE_DATA=false` and `ENTRY_MICROSTRUCTURE_NEUTRAL_ENTRIES_ENABLED=true` restore the previous reduced-risk paper-experiment behavior. Configure it with `ENTRY_MICROSTRUCTURE_*`; `AI_COMMITTEE_MIN_CONSENSUS` defaults to `0.75`.
+
+Trading logs persist a structured context for every entry, rejection, protection update, partial close, and final exit. It includes the event code, decision cycle, gate, entry signal, market snapshot, and the safe microstructure summary; the Logs panel exposes it under `Детали записи`, and the trading-audit CSV exports it as JSON.
+
+Open positions are managed from exchange tickers directly and do not wait for an hourly candle/indicator refresh. The price selector uses the bid for a long and the ask for a short when no last price is available, so stop checks stay conservative. Ticker and price-data failures are recorded in the structured log.
 
 After every closed losing position, `trade_post_mortems` stores the 30-minute pre-entry/position path, entry and exit microstructure, MFE/MAE, fees/slippage, behavior labels, shaped reward, lesson, and replay priority. Correct stop discipline receives credit even when financial PnL is negative. The dashboard and Telegram close report explain the result; `/api/v1/strategy-lab/post-mortems` and `/api/v1/strategy-lab/shadow-trades` expose the auditable records.
 
@@ -342,7 +358,7 @@ Supported commands:
 ## Current MVP Behavior
 
 - Uses paper trading by default through `PAPER_TRADING=true`.
-- Can open low-risk, clearly labelled exploratory paper positions from strong neutral setups so the learning loop can collect closed-trade outcomes without placing real orders.
+- Opens exploratory paper positions from strong neutral setups only when explicitly enabled, so the standard configuration trades strict, validated signals only.
 - Blocks non-sandbox live exchange execution unless `ALLOW_LIVE_TRADING_WITHOUT_SANDBOX=true` is deliberately set.
 - Supports a dedicated `APP_PROCESS=trader` worker that loops automatically, manages open positions, and scans for new entries.
 - Registers/logs in users with JWT.
