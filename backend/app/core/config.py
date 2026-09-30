@@ -5,10 +5,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_TRADING_SYMBOLS = (
-    "ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT,"
-    "AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,AAVE/USDT,UNI/USDT,NEAR/USDT,"
-    "FET/USDT,ONDO/USDT"
+    "ETH/USDT,BNB/USDT,SOL/USDT,ADA/USDT,LINK/USDT,DOT/USDT,TRX/USDT,"
+    "AAVE/USDT,UNI/USDT,ONDO/USDT"
 )
+
+# These instruments were deliberately removed from the trading universe.  Keep
+# this separate from the configurable exclusion list so an old Railway
+# environment variable cannot accidentally put them back into scanner, candle,
+# RL, shadow, or entry workflows after a deploy.
+RETIRED_TRADING_SYMBOLS = frozenset({
+    "DOGE/USDT",
+    "AVAX/USDT",
+    "NEAR/USDT",
+    "LTC/USDT",
+    "FET/USDT",
+    "XRP/USDT",
+})
 
 
 class Settings(BaseSettings):
@@ -267,7 +279,8 @@ class Settings(BaseSettings):
 
     @property
     def trading_excluded_symbols(self) -> list[str]:
-        return _parse_symbol_csv(self.trading_excluded_symbols_raw)
+        configured = _parse_symbol_csv(self.trading_excluded_symbols_raw)
+        return list(dict.fromkeys([*sorted(RETIRED_TRADING_SYMBOLS), *configured]))
 
     def is_symbol_excluded(self, symbol: str) -> bool:
         return str(symbol or "").strip().upper() in set(self.trading_excluded_symbols)

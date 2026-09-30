@@ -22,9 +22,8 @@ import "./styles.css";
 type View = "dashboard" | "audit" | "market" | "agents" | "logs" | "settings";
 
 const TRADING_SYMBOLS = [
-  "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT",
-  "LINK/USDT", "AVAX/USDT", "DOT/USDT", "LTC/USDT", "TRX/USDT", "AAVE/USDT",
-  "UNI/USDT", "NEAR/USDT", "FET/USDT", "ONDO/USDT"
+  "ETH/USDT", "BNB/USDT", "SOL/USDT", "ADA/USDT", "LINK/USDT", "DOT/USDT",
+  "TRX/USDT", "AAVE/USDT", "UNI/USDT", "ONDO/USDT"
 ];
 
 function App() {

@@ -31,12 +31,15 @@ def test_rl_worker_trains_by_default(monkeypatch):
     assert Settings(_env_file=None).rl_trainer_enabled is True
 
 
-def test_default_market_universe_excludes_bitcoin_and_expands_altcoin_coverage():
+def test_default_market_universe_excludes_bitcoin_and_retired_pairs():
     settings = Settings(_env_file=None)
 
-    assert len(settings.market_scan_symbols) == 16
+    assert len(settings.market_scan_symbols) == 10
     assert "BTC/USDT" not in settings.market_scan_symbols
-    assert {"ETH/USDT", "LINK/USDT", "TRX/USDT", "AAVE/USDT", "UNI/USDT", "NEAR/USDT"}.issubset(
+    assert {"ETH/USDT", "LINK/USDT", "TRX/USDT", "AAVE/USDT", "UNI/USDT", "ONDO/USDT"}.issubset(
+        settings.market_scan_symbols
+    )
+    assert not {"DOGE/USDT", "AVAX/USDT", "NEAR/USDT", "LTC/USDT", "FET/USDT", "XRP/USDT"}.intersection(
         settings.market_scan_symbols
     )
     assert settings.rl_symbols == settings.market_scan_symbols
@@ -46,9 +49,9 @@ def test_default_market_universe_excludes_bitcoin_and_expands_altcoin_coverage()
 def test_exclusion_overrides_legacy_railway_symbol_lists():
     settings = Settings(
         _env_file=None,
-        MARKET_SCAN_SYMBOLS="BTC/USDT,eth/usdt,SOL/USDT",
-        CANDLE_INGEST_SYMBOLS="BTC/USDT,ETH/USDT",
-        RL_SYMBOLS="BTC/USDT,SOL/USDT",
+        MARKET_SCAN_SYMBOLS="BTC/USDT,eth/usdt,SOL/USDT,DOGE/USDT",
+        CANDLE_INGEST_SYMBOLS="BTC/USDT,ETH/USDT,AVAX/USDT",
+        RL_SYMBOLS="BTC/USDT,SOL/USDT,XRP/USDT",
         TRADING_EXCLUDED_SYMBOLS="btc/usdt",
     )
 
@@ -56,6 +59,8 @@ def test_exclusion_overrides_legacy_railway_symbol_lists():
     assert settings.candle_ingest_symbols == ["ETH/USDT"]
     assert settings.rl_symbols == ["SOL/USDT"]
     assert settings.is_symbol_excluded("btc/usdt") is True
+    assert settings.is_symbol_excluded("doge/usdt") is True
+    assert settings.is_symbol_excluded("XRP/USDT") is True
 
 
 def test_strong_spot_setup_can_reach_tradeable_rating_without_open_interest():
