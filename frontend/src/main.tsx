@@ -457,7 +457,24 @@ function DashboardView() {
         />
       </div>
       <div className="metric-grid">
-        <Metric label="Баланс" value={`$${fmt(data?.balance)}`} />
+        <Metric
+          label={data?.balance_source === "PAPER" ? "Paper-баланс" : "Баланс биржи"}
+          value={`$${fmt(data?.balance)}`}
+        />
+        {data?.starting_balance != null && (
+          <Metric
+            label={`Изменение от $${fmt(data.starting_balance)}`}
+            value={fmtSignedUsd(data.balance_change)}
+            tone={(data.balance_change ?? 0) >= 0 ? "good" : "bad"}
+          />
+        )}
+        {data?.starting_balance != null && (
+          <Metric
+            label="Доходность paper-баланса"
+            value={fmtSignedPercent(data.balance_change_percent)}
+            tone={(data.balance_change_percent ?? 0) >= 0 ? "good" : "bad"}
+          />
+        )}
         <Metric label="PnL за день" value={`$${fmt(data?.pnl_day)}`} tone={(data?.pnl_day ?? 0) >= 0 ? "good" : "bad"} />
         <Metric label="PnL за неделю" value={`$${fmt(data?.pnl_week)}`} />
         <Metric label="Win Rate за всё время" value={`${fmt(data?.analytics?.win_rate ?? data?.win_rate)}%`} />
@@ -1668,6 +1685,16 @@ function EmptyRow(props: { cols: number; text: string }) {
 
 function fmt(value: number | undefined) {
   return Number(value ?? 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+}
+
+function fmtSignedUsd(value: number | null | undefined) {
+  const number = Number(value ?? 0);
+  return `${number >= 0 ? "+" : "−"}$${fmt(Math.abs(number))}`;
+}
+
+function fmtSignedPercent(value: number | null | undefined) {
+  const number = Number(value ?? 0);
+  return `${number >= 0 ? "+" : "−"}${fmt(Math.abs(number))}%`;
 }
 
 const TRADE_CHART_TIMEFRAMES = [

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     default_exchange: str = "binance"
     exchange_default_type: str = "spot"
     paper_trading: bool = True
+    # Virtual starting capital used only while execution is in paper mode.
+    # It is independent from exchange credentials and gives the dashboard a
+    # stable baseline for showing the paper account's equity and PnL.
+    paper_starting_balance: float = Field(default=638.0, gt=0, validation_alias="PAPER_STARTING_BALANCE")
     live_trading_enabled: bool = False
     exchange_sandbox_enabled: bool = True
     allow_live_trading_without_sandbox: bool = False

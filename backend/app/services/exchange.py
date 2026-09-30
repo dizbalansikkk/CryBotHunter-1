@@ -83,14 +83,14 @@ class ExchangeClient:
 
     async def get_balance(self) -> dict[str, float]:
         if self.settings.paper_trading or not self.settings.live_trading_enabled:
-            return {"USDT": 1000.0}
+            return {"USDT": float(self.settings.paper_starting_balance)}
         client = self._client(authenticated=True)
         balance = await asyncio.to_thread(client.fetch_balance)
         return {asset: float(amount) for asset, amount in balance.get("total", {}).items() if amount}
 
     async def get_free_balance(self) -> dict[str, float]:
         if self.settings.paper_trading or not self.settings.live_trading_enabled:
-            return {"USDT": 1000.0}
+            return {"USDT": float(self.settings.paper_starting_balance)}
         client = self._client(authenticated=True)
         balance = await asyncio.to_thread(client.fetch_balance)
         return {asset: float(amount) for asset, amount in balance.get("free", {}).items() if amount}

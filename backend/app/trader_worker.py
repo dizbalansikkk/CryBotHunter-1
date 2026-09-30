@@ -96,7 +96,7 @@ async def main() -> None:
                                 await heartbeat.set_status("PAUSED", {"reason": reason or "unknown"})
                             elif not shutdown.requested:
                                 risk_settings = RiskSettings(
-                                    balance=1000,
+                                    balance=settings.paper_starting_balance,
                                     risk_percent=user_settings.risk_percent,
                                     daily_risk_percent=user_settings.daily_risk_percent,
                                     max_positions=user_settings.max_positions,

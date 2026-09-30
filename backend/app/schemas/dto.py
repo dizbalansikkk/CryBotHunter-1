@@ -686,6 +686,10 @@ class TradingAuditOut(BaseModel):
 
 class DashboardOut(BaseModel):
     balance: float
+    starting_balance: float | None = None
+    balance_change: float | None = None
+    balance_change_percent: float | None = None
+    balance_source: str = "EXCHANGE"
     pnl_day: float
     pnl_week: float
     win_rate: float

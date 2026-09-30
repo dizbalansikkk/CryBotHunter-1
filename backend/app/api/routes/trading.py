@@ -31,7 +31,7 @@ async def run_once(user: User = Depends(current_user), db: AsyncSession = Depend
         return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
     user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one()
     risk_settings = RiskSettings(
-        balance=1000,
+        balance=runtime_settings.paper_starting_balance,
         risk_percent=user_settings.risk_percent,
         daily_risk_percent=user_settings.daily_risk_percent,
         max_positions=user_settings.max_positions,

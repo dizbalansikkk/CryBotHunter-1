@@ -1,5 +1,6 @@
 import pytest
 
+from app.api.routes.dashboard import paper_equity
 from app.services.exchange import ExchangeClient
 from app.services.execution import ExecutionService
 
@@ -46,6 +47,21 @@ def test_exchange_allows_live_with_sandbox(monkeypatch):
     monkeypatch.setattr(client.settings, "allow_live_trading_without_sandbox", False)
 
     client._assert_live_safety()
+
+
+@pytest.mark.asyncio
+async def test_paper_balance_uses_configured_starting_capital(monkeypatch):
+    client = ExchangeClient()
+    monkeypatch.setattr(client.settings, "paper_trading", True)
+    monkeypatch.setattr(client.settings, "paper_starting_balance", 638.0)
+
+    assert await client.get_balance() == {"USDT": 638.0}
+    assert await client.get_free_balance() == {"USDT": 638.0}
+
+
+def test_paper_equity_tracks_profit_and_loss_from_638_usdt():
+    assert paper_equity(638.0, 12.5) == (650.5, 12.5, 1.9592)
+    assert paper_equity(638.0, -20.0) == (618.0, -20.0, -3.1348)
 
 
 def test_exchange_order_params_include_client_id_and_reduce_only():

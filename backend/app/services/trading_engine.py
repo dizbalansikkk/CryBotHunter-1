@@ -470,7 +470,10 @@ class TradingEngine:
                 await db.execute(select(Position).where(Position.status == "OPEN").order_by(Position.entered_at.asc()))
             ).scalars().all()
         )
-        balance = self._safe_balance((await self.exchange.get_balance()).get("USDT"), fallback=1000.0)
+        balance = self._safe_balance(
+            (await self.exchange.get_balance()).get("USDT"),
+            fallback=float(self.settings.paper_starting_balance),
+        )
         if not positions:
             drawdown = await self._enforce_drawdown_limit(db, balance)
             if drawdown.emergency:

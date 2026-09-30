@@ -229,6 +229,10 @@ export type Order = {
 
 export type Dashboard = {
   balance: number;
+  starting_balance?: number | null;
+  balance_change?: number | null;
+  balance_change_percent?: number | null;
+  balance_source?: "PAPER" | "EXCHANGE";
   pnl_day: number;
   pnl_week: number;
   win_rate: number;
