@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.api.routes.positions import _aggregate_hourly_candles, position_chart
+from app.api.routes.positions import _aggregate_hourly_candles, _live_chart_candles, _merge_chart_candles, position_chart
 from app.models.entities import Candle, Position
 
 
@@ -144,3 +144,28 @@ def test_trade_chart_aggregates_persisted_hourly_ohlcv_without_inventing_prices(
     assert (aggregated[0].open, aggregated[0].high, aggregated[0].low, aggregated[0].close) == (100, 106, 98, 104)
     assert aggregated[0].volume == 100
     assert aggregated[0].source == "aggregated_1h"
+
+
+def test_live_chart_rows_replace_only_matching_persisted_candle_timestamps():
+    timestamp = datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
+    persisted = [
+        Candle(
+            symbol="ETH/USDT", timeframe="1h", timestamp=timestamp,
+            open=100, high=101, low=99, close=100.5, volume=10, source="ccxt",
+        ),
+        Candle(
+            symbol="ETH/USDT", timeframe="1h", timestamp=timestamp + timedelta(hours=1),
+            open=100.5, high=102, low=100, close=101, volume=11, source="ccxt",
+        ),
+    ]
+    live = _live_chart_candles(
+        [[int((timestamp + timedelta(hours=1)).timestamp() * 1000), 100.5, 104, 100, 103, 17]],
+        "ETH/USDT",
+        "1h",
+    )
+
+    merged = _merge_chart_candles(persisted, live)
+
+    assert len(merged) == 2
+    assert merged[0].close == 100.5
+    assert (merged[1].high, merged[1].close, merged[1].volume, merged[1].source) == (104, 103, 17, "exchange_live")

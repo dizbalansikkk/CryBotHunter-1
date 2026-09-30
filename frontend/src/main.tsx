@@ -1703,6 +1703,7 @@ const TRADE_CHART_TIMEFRAMES = [
   { value: "12h", label: "12 часов" },
   { value: "1d", label: "24 часа" }
 ] as const;
+const OPEN_TRADE_CHART_REFRESH_MS = 5_000;
 
 function TradeChartsPanel() {
   const [positions, setPositions] = React.useState<Position[]>([]);
@@ -1711,6 +1712,7 @@ function TradeChartsPanel() {
   const [chart, setChart] = React.useState<TradeChart | null>(null);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  const liveRefreshInFlight = React.useRef(false);
 
   const loadPositions = React.useCallback(async () => {
     try {
@@ -1724,21 +1726,25 @@ function TradeChartsPanel() {
 
   React.useEffect(() => void loadPositions(), [loadPositions]);
 
-  const loadChart = React.useCallback(async () => {
+  const loadChart = React.useCallback(async (quiet = false) => {
     if (!selectedId) {
       setChart(null);
       return;
     }
     try {
-      setLoading(true);
-      setError("");
+      if (!quiet) {
+        setLoading(true);
+        setError("");
+      }
       const { data } = await api.get<TradeChart>(`/positions/${selectedId}/chart?timeframe=${timeframe}`);
       setChart(data);
     } catch (err) {
-      setChart(null);
-      setError(readError(err));
+      if (!quiet) {
+        setChart(null);
+        setError(readError(err));
+      }
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [selectedId, timeframe]);
 
@@ -1762,11 +1768,16 @@ function TradeChartsPanel() {
 
   React.useEffect(() => {
     if (selected?.status !== "OPEN") return;
-    // The chart never invents ticks: this only re-reads the latest candles
-    // and position state which background workers have already persisted.
+    // Only the selected open position is polled.  The API merges factual
+    // history with the latest public-exchange candle, so this is live market
+    // data rather than a redrawing of the local candle cache.
     const timer = window.setInterval(() => {
-      void Promise.all([loadPositions(), loadChart()]);
-    }, 30_000);
+      if (liveRefreshInFlight.current) return;
+      liveRefreshInFlight.current = true;
+      void Promise.all([loadPositions(), loadChart(true)]).finally(() => {
+        liveRefreshInFlight.current = false;
+      });
+    }, OPEN_TRADE_CHART_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [loadChart, loadPositions, selected?.id, selected?.status]);
 
@@ -1775,7 +1786,7 @@ function TradeChartsPanel() {
       <div className="trade-chart-heading">
         <div>
           <div className="table-title">График сделки</div>
-          <p className="muted">Сохранённые свечи и фактические уровни позиции: вход, SL, TP и безубыток.</p>
+          <p className="muted">Открытая сделка получает живые свечи биржи автоматически; закрытая — сохраняет фактическую историю входа, выхода, SL и TP.</p>
         </div>
         <div className="trade-chart-controls">
           <select value={selectedId ?? ""} onChange={(event) => setSelectedId(Number(event.target.value) || null)} aria-label="Выбор сделки">
@@ -1863,7 +1874,12 @@ function TradePriceChart({ chart }: { chart: TradeChart }) {
         <strong>{chart.symbol}</strong>
         <span>{chart.status === "OPEN" ? "Открытая позиция" : "Закрытая позиция"}</span>
         <span>ТФ {chart.timeframe}</span>
-        {chart.status === "OPEN" && <span className="trade-chart-live">● обновление сохранённых данных каждые 30 сек.</span>}
+        {chart.status === "OPEN" && (
+          <span className={`trade-chart-live ${chart.live_market ? "" : "stale"}`}>
+            ● {chart.live_market ? `рынок live · каждые ${OPEN_TRADE_CHART_REFRESH_MS / 1000} сек.` : "ожидание live-данных биржи"}
+          </span>
+        )}
+        {chart.live_updated_at && <span>Получено: {new Date(chart.live_updated_at).toLocaleTimeString("ru-RU")}</span>}
         {lastCandle && <span>Последняя свеча: ${fmt(lastCandle.close)}</span>}
       </div>
       {chart.candles.length > 1 ? (

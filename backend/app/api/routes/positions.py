@@ -30,6 +30,7 @@ _CHART_TIMEFRAMES = {
     "1d": 86_400,
 }
 _CHART_MAX_POINTS = 600
+_LIVE_CHART_CANDLE_LIMIT = 500
 
 
 def _log_position_event(
@@ -66,15 +67,10 @@ async def list_positions(
 async def position_chart(
     position_id: int,
     timeframe: str = Query(default="1h", pattern="^(1m|5m|15m|1h|4h|12h|1d)$"),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TradeChartOut:
-    """Return only persisted chart data and recorded trade levels.
-
-    This is deliberately database-backed: a historical trade graph must not
-    silently substitute today's public price path for the one available when a
-    position was opened or closed.
-    """
+    """Return factual historical data and a live public-market tail for open positions."""
     position = (await db.execute(select(Position).where(Position.id == position_id))).scalar_one_or_none()
     if not position:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -122,12 +118,50 @@ async def position_chart(
         )
         candles = _aggregate_hourly_candles(hourly_candles, timeframe)
         aggregated_from_hourly = bool(candles)
+    live_market = False
+    live_updated_at: datetime | None = None
+    live_error: str | None = None
+    if position.status == "OPEN" and user is not None:
+        # Closed trades are intentionally immutable historical reports.  For
+        # an open trade, append the exchange's latest public OHLCV rows so the
+        # in-progress candle moves without waiting for the candle worker.
+        try:
+            user_settings = (
+                await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+            ).scalar_one_or_none()
+            if user_settings is not None:
+                exchange = ExchangeClient.from_user_settings(user_settings)
+                try:
+                    rows = await exchange.fetch_ohlcv(
+                        position.symbol,
+                        timeframe=timeframe,
+                        limit=_LIVE_CHART_CANDLE_LIMIT,
+                    )
+                finally:
+                    await exchange.close()
+                live_candles = _live_chart_candles(rows, position.symbol, timeframe)
+                if live_candles:
+                    candles = _merge_chart_candles(candles, live_candles)
+                    live_market = True
+                    live_updated_at = datetime.now(timezone.utc)
+        except Exception as exc:
+            # A chart must remain usable from local history during a temporary
+            # exchange outage.  Do not write a database log for every five-
+            # second refresh; the response itself transparently reports this.
+            live_error = type(exc).__name__
     sampled, sample_note = _downsample_candles(candles, _CHART_MAX_POINTS)
     if not sampled:
         data_note = (
             f"Недостаточно данных для отображения свечного графика: в локальной истории "
             f"нет сохранённых свечей {position.symbol} на таймфрейме {timeframe} в период сделки."
         )
+    elif live_market:
+        data_note = (
+            f"Показаны {len(sampled)} свечей; последние данные получены напрямую с биржи. "
+            "Открытая позиция обновляется автоматически, текущая свеча может меняться."
+        )
+        if sample_note:
+            data_note = f"{data_note} {sample_note}"
     elif aggregated_from_hourly:
         data_note = (
             f"Показаны {len(sampled)} свечей {timeframe}, агрегированных из сохранённых 1h-свечей; "
@@ -140,6 +174,8 @@ async def position_chart(
     else:
         sources = ", ".join(sorted({str(candle.source) for candle in sampled if candle.source}))
         data_note = f"Показаны сохранённые свечи: {len(sampled)} шт.; источник: {sources or 'не указан'}."
+    if position.status == "OPEN" and live_error:
+        data_note = f"{data_note} Свежие данные биржи временно недоступны ({live_error}); показана локальная история."
 
     return TradeChartOut(
         position_id=position.id,
@@ -162,6 +198,8 @@ async def position_chart(
         levels=_chart_levels(position),
         markers=_chart_markers(position),
         data_note=data_note,
+        live_market=live_market,
+        live_updated_at=live_updated_at,
     )
 
 
@@ -260,6 +298,44 @@ def _aggregate_hourly_candles(candles: list[Candle], timeframe: str) -> list[Can
             )
         )
     return aggregated
+
+
+def _live_chart_candles(rows: list[list[float]], symbol: str, timeframe: str) -> list[Candle]:
+    """Convert only valid public-exchange OHLCV rows into non-persisted chart candles."""
+    candles: list[Candle] = []
+    for row in rows:
+        if len(row) < 6:
+            continue
+        try:
+            timestamp_ms, open_price, high, low, close, volume = (float(value) for value in row[:6])
+        except (TypeError, ValueError):
+            continue
+        values = (timestamp_ms, open_price, high, low, close, volume)
+        if not all(value == value and abs(value) != float("inf") for value in values):
+            continue
+        if timestamp_ms <= 0 or min(open_price, high, low, close) <= 0 or volume < 0:
+            continue
+        candles.append(
+            Candle(
+                symbol=symbol,
+                timeframe=timeframe,
+                timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc),
+                open=open_price,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                source="exchange_live",
+            )
+        )
+    return candles
+
+
+def _merge_chart_candles(persisted: list[Candle], live: list[Candle]) -> list[Candle]:
+    """Prefer the fresh exchange candle on equal timestamps without inventing OHLCV."""
+    by_timestamp = {_as_utc(candle.timestamp): candle for candle in persisted}
+    by_timestamp.update({_as_utc(candle.timestamp): candle for candle in live})
+    return [by_timestamp[timestamp] for timestamp in sorted(by_timestamp)]
 
 
 def _positive_number(value: object) -> float | None:

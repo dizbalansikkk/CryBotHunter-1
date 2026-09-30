@@ -567,6 +567,8 @@ class TradeChartOut(BaseModel):
     levels: list[TradeChartLevelOut] = Field(default_factory=list)
     markers: list[TradeChartMarkerOut] = Field(default_factory=list)
     data_note: str | None = None
+    live_market: bool = False
+    live_updated_at: datetime | None = None
 
 
 class OrderOut(BaseModel):

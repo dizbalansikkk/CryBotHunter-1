@@ -86,6 +86,8 @@ export type TradeChart = {
   levels: TradeChartLevel[];
   markers: TradeChartMarker[];
   data_note?: string | null;
+  live_market?: boolean;
+  live_updated_at?: string | null;
 };
 
 export type TradeHistoryItem = {
