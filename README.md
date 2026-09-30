@@ -279,7 +279,7 @@ SHADOW_FORWARD_MAX_DRAWDOWN_PERCENT=8
 SHADOW_FORWARD_MAX_TRIAL_DAYS=7
 ```
 
-The RL service needs no Binance API key because OHLCV is public. Set its Railway Config File to `/backend/railway.rl.toml`; this selects `Dockerfile.rl`. Deploy it in the same Railway region that can reach Binance. Stable Baselines3 and CPU-only PyTorch are installed only by `Dockerfile.rl`; the web, trader, and Telegram images remain smaller.
+The RL service needs no Binance API key because OHLCV is public. Set its Railway Config File to `/backend/railway.rl.toml`; this selects `Dockerfile.rl`. Deploy it in the same Railway region that can reach Binance. `Dockerfile.rl` is preferred because it keeps the RL packages isolated. As a deployment safety net, the standard backend image now also contains Stable Baselines3 and CPU-only PyTorch: an RL worker configured with the standard Dockerfile will start instead of repeatedly failing with `ModuleNotFoundError`.
 
 PPO training runs outside the asyncio event loop, so `rl-worker` keeps publishing heartbeat updates while PyTorch is busy. `RL_SYMBOLS` defines the RL universe independently from the market scanner, while `RL_TRAINING_MAX_PER_CYCLE` limits heavy training attempts and lets missing pairs enter the queue gradually. Worker status reports expose the current pair, progress, active and shadow decisions, and deferred training totals.
 

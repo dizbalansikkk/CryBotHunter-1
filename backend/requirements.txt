@@ -24,3 +24,9 @@ httpx==0.28.1
 Pillow==10.4.0
 pytest==8.3.4
 pytest-asyncio==0.25.0
+# Fallback for Railway workers configured with the standard Dockerfile.  The
+# dedicated Dockerfile.rl remains preferred, but an RL worker must never start
+# without its runtime solely because its Railway config file was not selected.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0+cpu
+stable-baselines3==2.9.0

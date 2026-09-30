@@ -21,6 +21,13 @@ def test_rl_image_installs_rl_requirements():
     assert "torch" in requirements
 
 
+def test_standard_image_has_rl_runtime_fallback_for_railway_worker():
+    requirements = (BACKEND_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "stable-baselines3==2.9.0" in requirements
+    assert "torch==2.8.0+cpu" in requirements
+
+
 def test_entrypoint_supports_every_documented_process():
     entrypoint = (BACKEND_ROOT / "entrypoint.sh").read_text(encoding="utf-8")
 
