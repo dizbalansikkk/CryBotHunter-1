@@ -1582,6 +1582,13 @@ function fmt(value: number | undefined) {
   return Number(value ?? 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 }
 
+const TRADE_CHART_TIMEFRAMES = [
+  { value: "1h", label: "1 час" },
+  { value: "4h", label: "4 часа" },
+  { value: "12h", label: "12 часов" },
+  { value: "1d", label: "24 часа" }
+] as const;
+
 function TradeChartsPanel() {
   const [positions, setPositions] = React.useState<Position[]>([]);
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
@@ -1638,6 +1645,16 @@ function TradeChartsPanel() {
   React.useEffect(() => void loadChart(), [loadChart]);
   const selected = positions.find((position) => position.id === selectedId);
 
+  React.useEffect(() => {
+    if (selected?.status !== "OPEN") return;
+    // The chart never invents ticks: this only re-reads the latest candles
+    // and position state which background workers have already persisted.
+    const timer = window.setInterval(() => {
+      void Promise.all([loadPositions(), loadChart()]);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [loadChart, loadPositions, selected?.id, selected?.status]);
+
   return (
     <div className="panel-block trade-chart-panel">
       <div className="trade-chart-heading">
@@ -1654,17 +1671,24 @@ function TradeChartsPanel() {
               </option>
             ))}
           </select>
-          <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Таймфрейм графика">
-            <option value="1m">1 мин</option>
-            <option value="5m">5 мин</option>
-            <option value="15m">15 мин</option>
-            <option value="1h">1 час</option>
-          </select>
+          <div className="trade-chart-timeframes" role="group" aria-label="Таймфрейм графика">
+            {TRADE_CHART_TIMEFRAMES.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={`trade-chart-timeframe ${timeframe === item.value ? "active" : ""}`}
+                onClick={() => setTimeframe(item.value)}
+                aria-pressed={timeframe === item.value}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <button className="btn compact" onClick={() => void Promise.all([loadPositions(), loadChart()])} disabled={loading}>
             <RefreshCw size={15} /> {loading ? "Загрузка" : "Обновить"}
           </button>
           <button className="btn compact" onClick={() => void ingestSelectedHistory()} disabled={loading || !selected}>
-            <Download size={15} /> Свечи
+            <Download size={15} /> Загрузить свечи
           </button>
         </div>
       </div>
@@ -1676,7 +1700,11 @@ function TradeChartsPanel() {
 }
 
 function TradePriceChart({ chart }: { chart: TradeChart }) {
-  const geometry = React.useMemo(() => buildTradeChartGeometry(chart), [chart]);
+  const [zoom, setZoom] = React.useState(1);
+  const [pan, setPan] = React.useState(0);
+  const [hovered, setHovered] = React.useState<TradeChartGeometry["candles"][number] | null>(null);
+  const drag = React.useRef<{ startX: number; startPan: number } | null>(null);
+  const geometry = React.useMemo(() => buildTradeChartGeometry(chart, zoom, pan), [chart, pan, zoom]);
   const levelStyle: Record<TradeChart["levels"][number]["kind"], string> = {
     ENTRY: "entry",
     STOP: "stop",
@@ -1685,6 +1713,34 @@ function TradePriceChart({ chart }: { chart: TradeChart }) {
     EXIT: "exit"
   };
 
+  React.useEffect(() => {
+    setZoom(1);
+    setPan(0);
+    setHovered(null);
+  }, [chart.position_id, chart.timeframe]);
+
+  const changeZoom = (multiplier: number) => {
+    setZoom((current) => Math.max(1, Math.min(16, current * multiplier)));
+  };
+
+  const updateHoveredCandle = (event: React.PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const pointerX = ((event.clientX - bounds.left) / Math.max(bounds.width, 1)) * geometry.width;
+    const candle = geometry.candles.reduce((nearest, current) => (
+      Math.abs(current.x - pointerX) < Math.abs(nearest.x - pointerX) ? current : nearest
+    ));
+    setHovered((current) => current?.timestamp === candle.timestamp ? current : candle);
+  };
+
+  const releaseDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    drag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const lastCandle = chart.candles[chart.candles.length - 1];
+
   return (
     <div className="trade-chart-body">
       <div className="trade-chart-meta">
@@ -1692,19 +1748,64 @@ function TradePriceChart({ chart }: { chart: TradeChart }) {
         <strong>{chart.symbol}</strong>
         <span>{chart.status === "OPEN" ? "Открытая позиция" : "Закрытая позиция"}</span>
         <span>ТФ {chart.timeframe}</span>
+        {chart.status === "OPEN" && <span className="trade-chart-live">● обновление сохранённых данных каждые 30 сек.</span>}
+        {lastCandle && <span>Последняя свеча: ${fmt(lastCandle.close)}</span>}
       </div>
       {chart.candles.length > 1 ? (
-        <div className="trade-chart-canvas" role="img" aria-label={`График сделки ${chart.symbol}`}>
-          <svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none">
+        <>
+          <div className="trade-chart-toolbar">
+            <span>Масштаб: {zoom.toFixed(zoom < 2 ? 1 : 0)}×</span>
+            <button type="button" className="chart-tool" onClick={() => changeZoom(1 / 1.5)} disabled={zoom <= 1} aria-label="Отдалить график">−</button>
+            <button type="button" className="chart-tool" onClick={() => changeZoom(1.5)} disabled={zoom >= 16} aria-label="Увеличить график">+</button>
+            <button type="button" className="chart-tool chart-tool-fit" onClick={() => { setZoom(1); setPan(0); }} disabled={zoom === 1 && pan === 0}>Показать всё</button>
+            <span className="muted">Колесо — масштаб; перетаскивание — перемещение по времени.</span>
+          </div>
+          <div
+            className={`trade-chart-canvas ${drag.current ? "dragging" : ""}`}
+            role="application"
+            aria-label={`Интерактивный график сделки ${chart.symbol}`}
+            onWheel={(event) => {
+              event.preventDefault();
+              changeZoom(event.deltaY < 0 ? 1.35 : 1 / 1.35);
+            }}
+            onPointerDown={(event) => {
+              if (geometry.visibleCount >= chart.candles.length) return;
+              drag.current = { startX: event.clientX, startPan: pan };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              updateHoveredCandle(event);
+              if (!drag.current) return;
+              const bounds = event.currentTarget.getBoundingClientRect();
+              const hiddenFraction = Math.max(1 - geometry.visibleCount / chart.candles.length, 0.0001);
+              const nextPan = drag.current.startPan + (drag.current.startX - event.clientX) / Math.max(bounds.width, 1) / hiddenFraction;
+              setPan(Math.max(0, Math.min(1, nextPan)));
+            }}
+            onPointerUp={releaseDrag}
+            onPointerCancel={releaseDrag}
+            onPointerLeave={() => { if (!drag.current) setHovered(null); }}
+          >
+            <svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none">
             <defs>
               <linearGradient id={`trade-area-${chart.position_id}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#54e8ff" stopOpacity="0.25" />
                 <stop offset="100%" stopColor="#54e8ff" stopOpacity="0" />
               </linearGradient>
             </defs>
-            {[0.2, 0.4, 0.6, 0.8].map((fraction) => <line key={fraction} x1="0" x2={geometry.width} y1={geometry.height * fraction} y2={geometry.height * fraction} className="trade-chart-grid" />)}
+            {geometry.priceTicks.map((tick) => (
+              <g key={tick.price} className="trade-chart-axis">
+                <line x1={geometry.plotLeft} x2={geometry.plotRight} y1={tick.y} y2={tick.y} className="trade-chart-grid" />
+                <text x={geometry.plotRight + 10} y={tick.y + 4}>${fmt(tick.price)}</text>
+              </g>
+            ))}
+            <line x1={geometry.plotLeft} x2={geometry.plotRight} y1={geometry.volumeBottom} y2={geometry.volumeBottom} className="trade-chart-volume-baseline" />
+            <text x={geometry.plotLeft} y={geometry.volumeTop - 4} className="trade-chart-volume-label">ОБЪЁМ</text>
+            {geometry.candles.map((candle) => (
+              <rect key={`${candle.timestamp}-volume`} x={candle.x - candle.bodyWidth / 2} y={candle.volumeY} width={candle.bodyWidth} height={Math.max(geometry.volumeBottom - candle.volumeY, 1)} className={candle.close >= candle.open ? "trade-chart-volume up" : "trade-chart-volume down"} />
+            ))}
             {geometry.candles.map((candle) => (
               <g key={candle.timestamp} className={candle.close >= candle.open ? "candle-up" : "candle-down"}>
+                <title>{`${formatChartTimestamp(candle.timestamp)} UTC\nОткрытие ${fmt(candle.open)} · Максимум ${fmt(candle.high)} · Минимум ${fmt(candle.low)} · Закрытие ${fmt(candle.close)}\nОбъём ${fmt(candle.volume)}`}</title>
                 <line x1={candle.x} x2={candle.x} y1={candle.highY} y2={candle.lowY} />
                 <rect x={candle.x - candle.bodyWidth / 2} y={candle.bodyY} width={candle.bodyWidth} height={Math.max(candle.bodyHeight, 1.25)} rx="0.5" />
               </g>
@@ -1713,19 +1814,27 @@ function TradePriceChart({ chart }: { chart: TradeChart }) {
             <path d={geometry.closePath} className="trade-close-line" />
             {geometry.levels.map((level) => (
               <g key={level.key} className={`trade-level ${levelStyle[level.kind]}`}>
-                <line x1="0" x2={geometry.width} y1={level.y} y2={level.y} />
-                <text x="8" y={Math.max(level.y - 4, 12)}>{level.label} ${fmt(level.price)}</text>
+                <line x1={geometry.plotLeft} x2={geometry.plotRight} y1={level.y} y2={level.y} />
+                <text x={geometry.plotLeft + 4} y={Math.max(level.y - 4, geometry.priceTop + 11)}>{level.label} ${fmt(level.price)}</text>
               </g>
             ))}
             {geometry.markers.map((marker) => (
               <g key={marker.key} className={`trade-marker ${marker.kind === "ENTRY" ? "entry" : "exit"}`}>
-                <line x1={marker.x} x2={marker.x} y1="0" y2={geometry.height} />
-                <circle cx={marker.x} cy={marker.y} r="4.5" />
-                <text x={Math.min(marker.x + 7, geometry.width - 72)} y="16">{marker.label}</text>
+                <line x1={marker.x} x2={marker.x} y1={geometry.priceTop} y2={geometry.priceBottom} />
+                <circle cx={marker.x} cy={marker.y} r="6" />
+                <text x={marker.textX} y={marker.textY} textAnchor={marker.textAnchor}>{marker.label} · ${fmt(marker.price)}</text>
               </g>
             ))}
+            {geometry.timeTicks.map((tick) => <text key={tick.timestamp} x={tick.x} y={geometry.height - 7} textAnchor="middle" className="trade-chart-time-label">{formatChartTimestamp(tick.timestamp)}</text>)}
           </svg>
-        </div>
+          </div>
+          {hovered && (
+            <div className="trade-chart-hover" aria-live="polite">
+              <strong>{formatChartTimestamp(hovered.timestamp)} UTC</strong>
+              <span>O ${fmt(hovered.open)} · H ${fmt(hovered.high)} · L ${fmt(hovered.low)} · C ${fmt(hovered.close)} · V {fmt(hovered.volume)}</span>
+            </div>
+          )}
+        </>
       ) : (
         <div className="trade-chart-empty">Недостаточно сохранённых свечей для линии графика.</div>
       )}
@@ -1740,31 +1849,49 @@ function TradePriceChart({ chart }: { chart: TradeChart }) {
 type TradeChartGeometry = {
   width: number;
   height: number;
+  plotLeft: number;
+  plotRight: number;
+  priceTop: number;
+  priceBottom: number;
+  volumeTop: number;
+  volumeBottom: number;
+  visibleCount: number;
   closePath: string;
   areaPath: string;
-  candles: Array<{ timestamp: string; x: number; highY: number; lowY: number; bodyY: number; bodyHeight: number; bodyWidth: number; open: number; close: number }>;
+  candles: Array<{ timestamp: string; x: number; highY: number; lowY: number; bodyY: number; bodyHeight: number; bodyWidth: number; volumeY: number; open: number; high: number; low: number; close: number; volume: number }>;
   levels: Array<{ key: string; label: string; price: number; y: number; kind: TradeChart["levels"][number]["kind"] }>;
-  markers: Array<{ key: string; label: string; kind: TradeChart["markers"][number]["kind"]; x: number; y: number }>;
+  markers: Array<{ key: string; label: string; kind: TradeChart["markers"][number]["kind"]; x: number; y: number; price: number; textX: number; textY: number; textAnchor: "start" | "end" }>;
+  priceTicks: Array<{ price: number; y: number }>;
+  timeTicks: Array<{ timestamp: string; x: number }>;
 };
 
-function buildTradeChartGeometry(chart: TradeChart): TradeChartGeometry {
-  const width = 960;
-  const height = 340;
-  const prices = [...chart.candles.flatMap((candle) => [candle.high, candle.low]), ...chart.levels.map((level) => level.price), ...chart.markers.map((marker) => marker.price)].filter(Number.isFinite);
+function buildTradeChartGeometry(chart: TradeChart, zoom: number, pan: number): TradeChartGeometry {
+  const width = 1200;
+  const height = 420;
+  const plotLeft = 14;
+  const plotRight = 1080;
+  const priceTop = 16;
+  const priceBottom = 310;
+  const volumeTop = 338;
+  const volumeBottom = 395;
+  const visibleCount = Math.max(2, Math.min(chart.candles.length, Math.ceil(chart.candles.length / Math.max(zoom, 1))));
+  const maxStart = Math.max(chart.candles.length - visibleCount, 0);
+  const startIndex = Math.round(Math.max(0, Math.min(1, pan)) * maxStart);
+  const visibleCandles = chart.candles.slice(startIndex, startIndex + visibleCount);
+  const prices = [...visibleCandles.flatMap((candle) => [candle.high, candle.low]), ...chart.levels.map((level) => level.price), ...chart.markers.map((marker) => marker.price)].filter(Number.isFinite);
   const rawMin = Math.min(...prices);
   const rawMax = Math.max(...prices);
   const span = Math.max(rawMax - rawMin, Math.max(Math.abs(rawMax) * 0.002, 0.00000001));
   const minPrice = rawMin - span * 0.08;
   const maxPrice = rawMax + span * 0.08;
-  const priceToY = (price: number) => height - ((price - minPrice) / (maxPrice - minPrice)) * height;
-  const lastCandle = chart.candles[chart.candles.length - 1];
-  const lastMarker = chart.markers[chart.markers.length - 1];
-  const start = new Date(chart.candles[0]?.timestamp ?? chart.markers[0]?.timestamp ?? Date.now()).getTime();
-  const end = new Date(lastCandle?.timestamp ?? lastMarker?.timestamp ?? Date.now()).getTime();
+  const priceToY = (price: number) => priceBottom - ((price - minPrice) / (maxPrice - minPrice)) * (priceBottom - priceTop);
+  const start = new Date(visibleCandles[0]?.timestamp ?? chart.markers[0]?.timestamp ?? Date.now()).getTime();
+  const end = new Date(visibleCandles[visibleCandles.length - 1]?.timestamp ?? chart.markers[chart.markers.length - 1]?.timestamp ?? Date.now()).getTime();
   const timeSpan = Math.max(end - start, 1);
-  const timeToX = (value: string) => Math.max(0, Math.min(width, ((new Date(value).getTime() - start) / timeSpan) * width));
-  const bodyWidth = Math.max(1.5, Math.min(9, width / Math.max(chart.candles.length, 1) * 0.58));
-  const candles = chart.candles.map((candle) => {
+  const timeToX = (value: string) => plotLeft + Math.max(0, Math.min(1, (new Date(value).getTime() - start) / timeSpan)) * (plotRight - plotLeft);
+  const bodyWidth = Math.max(2, Math.min(18, (plotRight - plotLeft) / Math.max(visibleCandles.length, 1) * 0.62));
+  const maxVolume = Math.max(...visibleCandles.map((candle) => candle.volume), 1);
+  const candles = visibleCandles.map((candle) => {
     const openY = priceToY(candle.open);
     const closeY = priceToY(candle.close);
     return {
@@ -1775,22 +1902,72 @@ function buildTradeChartGeometry(chart: TradeChart): TradeChartGeometry {
       bodyY: Math.min(openY, closeY),
       bodyHeight: Math.abs(openY - closeY),
       bodyWidth,
+      volumeY: volumeBottom - (Math.max(candle.volume, 0) / maxVolume) * (volumeBottom - volumeTop),
       open: candle.open,
-      close: candle.close
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume
     };
   });
   const closePath = candles.map((candle, index) => `${index ? "L" : "M"}${candle.x.toFixed(2)},${priceToY(candle.close).toFixed(2)}`).join(" ");
   const lastCandleGeometry = candles[candles.length - 1];
-  const areaPath = closePath ? `${closePath} L${lastCandleGeometry?.x.toFixed(2)},${height} L${candles[0]?.x.toFixed(2)},${height} Z` : "";
+  const areaPath = closePath ? `${closePath} L${lastCandleGeometry?.x.toFixed(2)},${priceBottom} L${candles[0]?.x.toFixed(2)},${priceBottom} Z` : "";
+  const markerPadding = timeSpan / Math.max(visibleCandles.length - 1, 1) * 0.6;
+  const markerForViewport = chart.markers.filter((marker) => {
+    const timestamp = new Date(marker.timestamp).getTime();
+    return timestamp >= start - markerPadding && timestamp <= end + markerPadding;
+  });
   return {
     width,
     height,
+    plotLeft,
+    plotRight,
+    priceTop,
+    priceBottom,
+    volumeTop,
+    volumeBottom,
+    visibleCount,
     closePath,
     areaPath,
     candles,
     levels: chart.levels.map((level) => ({ ...level, y: priceToY(level.price) })),
-    markers: chart.markers.map((marker) => ({ ...marker, x: timeToX(marker.timestamp), y: priceToY(marker.price) }))
+    markers: markerForViewport.map((marker) => {
+      const x = timeToX(marker.timestamp);
+      const y = priceToY(marker.price);
+      const textAnchor = x > plotRight - 175 ? "end" : "start";
+      return {
+        ...marker,
+        x,
+        y,
+        textX: x + (textAnchor === "end" ? -10 : 10),
+        textY: Math.max(priceTop + 13, Math.min(priceBottom - 8, y - 12)),
+        textAnchor,
+      };
+    }),
+    priceTicks: [0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+      const price = maxPrice - fraction * (maxPrice - minPrice);
+      return { price, y: priceToY(price) };
+    }),
+    timeTicks: [...new Set([0, 0.25, 0.5, 0.75, 1].map((fraction) => (
+      Math.min(visibleCandles.length - 1, Math.round((visibleCandles.length - 1) * fraction))
+    )))].map((index) => {
+      const candle = visibleCandles[index];
+      return { timestamp: candle.timestamp, x: timeToX(candle.timestamp) };
+    })
   };
+}
+
+function formatChartTimestamp(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "—";
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(timestamp);
 }
 
 function learningStageLabel(value?: LearningProgress["stage"]) {

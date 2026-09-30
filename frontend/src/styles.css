@@ -572,6 +572,33 @@ button {
   min-width: 245px;
 }
 
+.trade-chart-timeframes {
+  @apply flex flex-wrap gap-1 rounded-md border p-1;
+  border-color: var(--line);
+  background: rgba(2, 17, 47, 0.78);
+}
+
+.trade-chart-timeframe, .chart-tool {
+  @apply rounded px-2 py-1 text-xs font-semibold transition-colors;
+  color: var(--muted);
+  background: transparent;
+}
+
+.trade-chart-timeframe:hover, .chart-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(84, 232, 255, 0.12);
+}
+
+.trade-chart-timeframe.active {
+  color: #031225;
+  background: var(--cyan);
+}
+
+.trade-chart-timeframe:focus-visible, .chart-tool:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
 .trade-chart-body {
   @apply p-4;
 }
@@ -589,15 +616,45 @@ button {
   color: var(--text);
 }
 
+.trade-chart-live {
+  color: var(--mint);
+}
+
+.trade-chart-toolbar {
+  @apply mb-2 flex flex-wrap items-center gap-2 text-xs;
+  color: var(--text);
+}
+
+.chart-tool {
+  min-width: 2rem;
+  border: 1px solid var(--line);
+  background: rgba(3, 20, 54, 0.72);
+}
+
+.chart-tool:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.chart-tool-fit {
+  min-width: auto;
+}
+
 .trade-chart-canvas {
-  height: min(50vw, 370px);
-  min-height: 240px;
+  height: min(56vw, 430px);
+  min-height: 270px;
   overflow: hidden;
   border: 1px solid rgba(126, 238, 255, 0.22);
   border-radius: 0.5rem;
+  cursor: crosshair;
+  touch-action: none;
   background:
     radial-gradient(circle at 88% 10%, rgba(84, 232, 255, 0.14), transparent 28%),
     linear-gradient(180deg, rgba(2, 14, 39, 0.92), rgba(3, 27, 68, 0.84));
+}
+
+.trade-chart-canvas.dragging {
+  cursor: grabbing;
 }
 
 .trade-chart-canvas svg {
@@ -609,6 +666,29 @@ button {
 .trade-chart-grid {
   stroke: rgba(125, 211, 252, 0.12);
   stroke-width: 1;
+}
+
+.trade-chart-axis text, .trade-chart-time-label, .trade-chart-volume-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trade-chart-volume-baseline {
+  stroke: rgba(125, 211, 252, 0.2);
+  stroke-width: 1;
+}
+
+.trade-chart-volume {
+  opacity: 0.42;
+}
+
+.trade-chart-volume.up {
+  fill: var(--mint);
+}
+
+.trade-chart-volume.down {
+  fill: var(--rose);
 }
 
 .candle-up line, .candle-up rect {
@@ -664,9 +744,24 @@ button {
   fill: var(--violet);
 }
 
+.trade-marker.exit circle {
+  filter: drop-shadow(0 0 5px rgba(167, 139, 250, 0.9));
+}
+
 .trade-marker line {
   stroke-width: 1.5;
   stroke-dasharray: 3 4;
+}
+
+.trade-chart-hover {
+  @apply mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-xs;
+  border-color: rgba(84, 232, 255, 0.32);
+  background: rgba(3, 20, 54, 0.8);
+  color: var(--muted);
+}
+
+.trade-chart-hover strong {
+  color: var(--text);
 }
 
 .trade-level-chip {
@@ -695,11 +790,15 @@ button {
 
 @media (max-width: 640px) {
   .trade-chart-canvas {
-    height: 280px;
+    height: 310px;
   }
 
   .trade-chart-controls select:first-child {
     min-width: min(100%, 245px);
+  }
+
+  .trade-chart-toolbar .muted {
+    flex-basis: 100%;
   }
 }
 

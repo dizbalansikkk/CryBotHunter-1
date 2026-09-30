@@ -158,7 +158,15 @@ class HistoricalDataService:
             raise ValueError(f"Unsupported candle timeframe: {timeframe}") from None
 
     def _paper_candles(self, symbol: str, timeframe: str, limit: int) -> list[dict]:
-        minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}.get(timeframe, 60)
+        minutes = {
+            "1m": 1,
+            "5m": 5,
+            "15m": 15,
+            "1h": 60,
+            "4h": 240,
+            "12h": 720,
+            "1d": 1_440,
+        }.get(timeframe, 60)
         now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         base = {"BTC/USDT": 68000, "ETH/USDT": 3600, "SOL/USDT": 155, "BNB/USDT": 620}.get(symbol, 2.5)
         candles: list[dict] = []

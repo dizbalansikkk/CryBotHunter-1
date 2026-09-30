@@ -18,7 +18,17 @@ from app.services.post_mortem import PostMortemService
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
-_CHART_TIMEFRAMES = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+_CHART_TIMEFRAMES = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14_400,
+    "12h": 43_200,
+    # CCXT/Binance call the 24-hour timeframe "1d".  The user interface
+    # deliberately presents it as "24 часа".
+    "1d": 86_400,
+}
 _CHART_MAX_POINTS = 600
 
 
@@ -55,7 +65,7 @@ async def list_positions(
 @router.get("/{position_id}/chart", response_model=TradeChartOut)
 async def position_chart(
     position_id: int,
-    timeframe: str = Query(default="1h", pattern="^(1m|5m|15m|1h)$"),
+    timeframe: str = Query(default="1h", pattern="^(1m|5m|15m|1h|4h|12h|1d)$"),
     _: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TradeChartOut:

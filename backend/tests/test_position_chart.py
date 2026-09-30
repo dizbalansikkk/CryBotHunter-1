@@ -83,3 +83,38 @@ async def test_trade_chart_uses_persisted_candles_and_recorded_trade_levels():
         ("stop_fill", 2505.4),
     }
     assert [(marker.key, marker.price) for marker in chart.markers] == [("entry", 2500), ("exit", 2575)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe", ("4h", "12h", "1d"))
+async def test_trade_chart_accepts_requested_longer_timeframes(timeframe: str):
+    entered_at = datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
+    position = Position(
+        id=19,
+        symbol="ETH/USDT",
+        side="LONG",
+        entry_price=2500,
+        current_price=2520,
+        volume=1,
+        stop=2475,
+        take=2575,
+        status="OPEN",
+        entered_at=entered_at,
+        entry_context={},
+    )
+    candle = Candle(
+        symbol="ETH/USDT",
+        timeframe=timeframe,
+        timestamp=entered_at,
+        open=2500,
+        high=2525,
+        low=2490,
+        close=2520,
+        volume=100,
+        source="ccxt",
+    )
+
+    chart = await position_chart(19, timeframe, None, _Db(position, [candle]))
+
+    assert chart.timeframe == timeframe
+    assert chart.candles[0].timestamp == entered_at
