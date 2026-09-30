@@ -42,7 +42,7 @@ async def main() -> None:
     heartbeat = HeartbeatReporter("trader-worker")
     last_cycle_report_at: datetime | None = None
     last_error_report_at: datetime | None = None
-    logger.info("Trader worker started with loop=%ss", settings.trader_loop_seconds)
+    logger.info("Trader-worker запущен: интервал торгового цикла=%s сек.", settings.trader_loop_seconds)
     await heartbeat.start()
     schema_ready = await wait_for_required_tables(
         database_engine,
@@ -54,7 +54,7 @@ async def main() -> None:
         await heartbeat.stop()
         await locks.close()
         await control.close()
-        logger.info("Trader worker stopped while waiting for database migration")
+        logger.info("Trader-worker остановлен во время ожидания миграции базы данных")
         return
     if settings.telegram_trade_reports_enabled:
         await notifier.broadcast(
@@ -80,7 +80,7 @@ async def main() -> None:
                     if acquired:
                         user_settings = (await db.execute(select(UserSettings).order_by(UserSettings.id.asc()).limit(1))).scalar_one_or_none()
                         if not user_settings:
-                            db.add(LogEntry(level="WARNING", message="Trader worker is waiting for the first user settings row"))
+                            db.add(LogEntry(level="WARNING", message="Trader-worker ожидает первую сохранённую строку пользовательских настроек"))
                             await db.commit()
                             await heartbeat.set_status("DEGRADED", {"reason": "waiting_for_settings"})
                         else:
@@ -92,7 +92,7 @@ async def main() -> None:
                             tick = await trading_engine.manage_open_positions(db)
                             paused, reason = await control.is_paused()
                             if paused:
-                                logger.warning("Trader worker entry scan paused: %s", reason)
+                                logger.warning("Сканирование новых входов приостановлено: %s", reason)
                                 await heartbeat.set_status("PAUSED", {"reason": reason or "unknown"})
                             elif not shutdown.requested:
                                 risk_settings = RiskSettings(
@@ -161,7 +161,7 @@ async def main() -> None:
                 market_type=settings.exchange_default_type,
                 sandbox=settings.exchange_sandbox_enabled,
             )
-            logger.error("Trader worker exchange unavailable: %s", message)
+            logger.error("Биржа недоступна для trader-worker: %s", message)
             await _record_worker_log(message)
             await heartbeat.set_status("DEGRADED", {"error": type(exc).__name__})
             if _report_due(last_error_report_at, 15):
@@ -169,7 +169,7 @@ async def main() -> None:
                 last_error_report_at = datetime.now(timezone.utc)
             delay = max(settings.trader_loop_seconds, 300)
         except Exception as exc:
-            logger.exception("Trader worker loop failed")
+            logger.exception("Ошибка торгового цикла trader-worker")
             await heartbeat.set_status("ERROR", {"error": type(exc).__name__})
             if _report_due(last_error_report_at, 15):
                 await notifier.broadcast(
@@ -184,7 +184,7 @@ async def main() -> None:
     await heartbeat.stop()
     await locks.close()
     await control.close()
-    logger.info("Trader worker shutdown complete")
+    logger.info("Trader-worker корректно завершил работу")
 
 
 async def _load_safety_credentials() -> SafetyCredentials | None:
@@ -210,15 +210,15 @@ def _cycle_summary(scanned: int, opened: int, skipped: int, decisions: list, clo
         reverse=True,
     )
     samples = "; ".join(
-        f"{decision.symbol}={decision.signal}/{decision.action}({decision.score}): {decision.reason}"
+        f"{decision.symbol}: сигнал={decision.signal}, результат={decision.action}, оценка={decision.score}"
         for decision in ranked[:5]
     )
     message = (
-        f"Auto-trade cycle scanned={scanned} opened={opened} skipped={skipped} "
-        f"closed={closed} learning_updates={closed} directional={metrics['directional_candidates']} "
-        f"strong_waits={metrics['strong_wait_candidates']} top_blocker={metrics['top_blocker']}"
+        f"Торговый цикл: проверено={scanned}; открыто={opened}; пропущено={skipped}; "
+        f"закрыто={closed}; обновлений обучения={closed}; направленных кандидатов={metrics['directional_candidates']}; "
+        f"сильных WAIT-кандидатов={metrics['strong_wait_candidates']}; главный блокирующий фильтр={metrics['top_blocker']}"
     )
-    return f"{message}; top_opportunities: {samples}"[:1000] if samples else message
+    return f"{message}; кандидаты: {samples}"[:1000] if samples else message
 
 
 def _cycle_metrics(decisions: list) -> dict[str, int | str]:
@@ -274,10 +274,10 @@ def _report_due(last_sent_at: datetime | None, interval_minutes: int) -> bool:
 async def _record_worker_log(message: str) -> None:
     try:
         async with AsyncSessionLocal() as db:
-            db.add(LogEntry(level="ERROR", message=f"Trader worker exchange unavailable: {message[:900]}"))
+            db.add(LogEntry(level="ERROR", message=f"Биржа недоступна для trader-worker: {message[:900]}"))
             await db.commit()
     except Exception:
-        logger.exception("Failed to record trader worker exchange error")
+        logger.exception("Не удалось сохранить запись об ошибке биржи trader-worker")
 
 
 if __name__ == "__main__":

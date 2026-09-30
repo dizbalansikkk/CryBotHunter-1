@@ -21,7 +21,7 @@ async def main() -> None:
     heartbeat = HeartbeatReporter("candle-worker")
     delay = settings.candle_ingest_loop_seconds
     logger.info(
-        "Candle worker started symbols=%s timeframes=%s loop=%ss",
+        "Candle-worker запущен: пары=%s таймфреймы=%s цикл=%s сек.",
         settings.candle_ingest_symbols,
         settings.candle_ingest_timeframes,
         settings.candle_ingest_loop_seconds,
@@ -49,7 +49,7 @@ async def main() -> None:
                                 limit=min(settings.candle_ingest_limit, 1000),
                             )
                             total = sum(inserted.values())
-                            db.add(LogEntry(level="INFO", message=f"Candle worker inserted {total} candle(s): {inserted}"))
+                            db.add(LogEntry(level="INFO", message=f"Candle-worker сохранил/обновил {total} свечей: {inserted}"))
                             await db.commit()
                             await heartbeat.set_status("OK", {"inserted": total})
                         else:
@@ -60,11 +60,11 @@ async def main() -> None:
                 delay = settings.candle_ingest_loop_seconds
             except (ccxt.RateLimitExceeded, ccxt.DDoSProtection):
                 delay = _next_rate_limit_delay(delay, settings.candle_ingest_loop_seconds)
-                logger.warning("Binance rate limit reached; candle ingestion will retry in %ss", delay)
+                logger.warning("Достигнут лимит запросов Binance; загрузка свечей будет повторена через %s сек.", delay)
                 await heartbeat.set_status("DEGRADED", {"reason": "rate_limit", "retry_seconds": delay})
             except Exception as exc:
                 delay = settings.candle_ingest_loop_seconds
-                logger.exception("Candle worker loop failed")
+                logger.exception("Ошибка цикла candle-worker")
                 await heartbeat.set_status("ERROR", {"error": type(exc).__name__})
             await asyncio.sleep(delay)
     finally:

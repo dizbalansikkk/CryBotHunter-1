@@ -1085,10 +1085,11 @@ function AgentActivityTable({ activity }: { activity: AgentActivity | null }) {
 function RlModelsTable({ items }: { items: RlModel[] }) {
   return (
     <div className="table-wrap">
-      <div className="table-title">RL-агент Stable Baselines3</div>
+      <div className="table-title">RL-модели Stable Baselines3</div>
+      <p className="muted table-explanation">«Активна» означает, что модель прошла validation и виртуальный forward-тест. «Тень» анализирует рынок, но не получает права влиять на входы.</p>
       <table>
         <thead>
-          <tr><th>Пара</th><th>Модель</th><th>Статус</th><th>Train / Validation</th><th>Доходность</th><th>Profit Factor</th><th>Просадка</th><th>Сделки</th><th>Forward test</th><th>Bad replay</th><th>Источник</th><th>Причина</th></tr>
+          <tr><th>Пара</th><th>Модель</th><th>Статус</th><th>Обучение / проверка</th><th>Доходность</th><th>Profit Factor</th><th>Просадка</th><th>Сделки</th><th>Виртуальная проверка</th><th>Разбор ошибок</th><th>Источник</th><th>Причина статуса</th></tr>
         </thead>
         <tbody>
           {items.map((item) => (
@@ -1097,7 +1098,7 @@ function RlModelsTable({ items }: { items: RlModel[] }) {
               <td>{item.algorithm} #{item.id}</td>
               <td>
                 <span className={`pill ${item.is_active ? "buy" : item.status === "REJECTED" ? "sell" : ""}`}>
-                  {item.is_active ? "Активна" : item.status === "SHADOW" ? "Тень · без торговли" : item.status === "RETIRED" ? "Архив" : item.status === "CANDIDATE" ? "Обучается" : "Отклонена"}
+                  {translateRlModelStatus(item.status, item.is_active)}
                 </span>
               </td>
               <td>{item.training_candles.toLocaleString()} / {item.validation_candles.toLocaleString()}</td>
@@ -1106,12 +1107,12 @@ function RlModelsTable({ items }: { items: RlModel[] }) {
               <td className="text-danger">{fmt(item.metrics.max_drawdown_percent)}%</td>
               <td>{item.metrics.trades ?? 0}</td>
               <td>
-                {item.metrics.forward_status ?? "-"}
+                {item.metrics.forward_status ? translateForwardStatus(item.metrics.forward_status) : "—"}
                 {item.metrics.forward && <div className="muted">{item.metrics.forward.closed_trades ?? 0} сделок · PF {fmt(item.metrics.forward.profit_factor)} · ${fmt(item.metrics.forward.total_pnl)}</div>}
               </td>
               <td>{item.metrics.bad_experiences_seen ?? 0} примеров · {item.metrics.replay_weighted_candles ?? 0} свечей · {item.metrics.curriculum_stages?.length ?? 0} этапа</td>
               <td>{item.metrics.market_data_source === "ccxt" ? "Реальный рынок" : item.metrics.market_data_source ?? "-"}</td>
-              <td>{item.metrics.promotion_reason ?? "-"}</td>
+              <td>{item.metrics.promotion_reason ? translatePromotionReason(item.metrics.promotion_reason) : "—"}</td>
             </tr>
           ))}
           {!items.length && <EmptyRow cols={12} text="RL-моделей пока нет. Тренер ожидает достаточную историю реальных свечей." />}
@@ -1248,6 +1249,7 @@ function LogsView() {
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [error, setError] = React.useState("");
   const [exporting, setExporting] = React.useState(false);
+  const [filter, setFilter] = React.useState<"all" | "trading" | "attention">("trading");
   const load = React.useCallback(async () => {
     try {
       setError("");
@@ -1278,50 +1280,12 @@ function LogsView() {
       setExporting(false);
     }
   }
-  function contextSummary(context: Record<string, unknown>) {
-    const labels: Array<[string, string]> = [
-      ["event", "событие"],
-      ["gate", "проверка"],
-      ["symbol", "пара"],
-      ["side", "направление"],
-      ["signal", "сигнал"],
-      ["lane", "режим"],
-      ["score", "оценка"],
-      ["pnl", "PnL"],
-      ["position_id", "позиция"],
-      ["order_id", "ордер"],
-      ["order_status", "статус ордера"],
-      ["requested_volume", "заявлено"],
-      ["filled_volume", "исполнено"],
-      ["remaining_volume", "остаток"],
-      ["exit_price", "цена выхода"],
-      ["exit_fee", "комиссия выхода"],
-      ["partial_profit", "PnL части"],
-      ["previous_take", "предыдущий TP"],
-      ["next_take", "следующий TP"],
-      ["locked_stop", "защитный SL"],
-      ["extension_distance", "ATR-шаг"],
-      ["reserved_stop_risk", "стоп-риск"],
-      ["candidate_stop_risk", "риск входа"],
-      ["exit_reason", "выход"]
-    ];
-    const summary = labels.flatMap(([key, label]) => {
-      const value = context[key];
-      return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-        ? [`${label}: ${String(value)}`]
-        : [];
-    });
-    const microstructure = context.microstructure;
-    if (typeof microstructure === "object" && microstructure !== null && !Array.isArray(microstructure)) {
-      const details = microstructure as Record<string, unknown>;
-      const status = details.status;
-      const sources = details.available_sources;
-      if (typeof status === "string" || typeof sources === "number") {
-        summary.push(`микро: ${typeof status === "string" ? status : "—"}, источников: ${typeof sources === "number" ? sources : "—"}`);
-      }
-    }
-    return summary;
-  }
+  const visibleLogs = logs.filter((log) => {
+    const hasTradingEvent = typeof log.context?.event === "string";
+    if (filter === "trading") return hasTradingEvent;
+    if (filter === "attention") return ["WARNING", "ERROR"].includes(log.level.toUpperCase());
+    return true;
+  });
   return (
     <section className="space-y-5">
       <Header title="Логи" subtitle="Причины входов и отказов, контроль риска и жизненный цикл сделок">
@@ -1331,33 +1295,158 @@ function LogsView() {
         <button className="btn" onClick={load}><RefreshCw size={16} /> Обновить</button>
       </Header>
       {error && <Alert tone="danger" text={error} />}
-      <Alert tone="good" text="Каждая новая торговая запись содержит событие, пару, проверку, направление и параметры риска. Раскрой «Детали» для полного контекста; он также попадает в CSV-аудит." />
+      <Alert tone="good" text="Журнал объясняет, что произошло, почему система приняла решение и какие параметры риска были использованы. Технический исходник остаётся доступен для аудита, но не заменяет понятное описание." />
+      <div className="log-filter" role="group" aria-label="Фильтр журнала">
+        <button type="button" className={`log-filter-button ${filter === "trading" ? "active" : ""}`} onClick={() => setFilter("trading")}>Сделки и защита</button>
+        <button type="button" className={`log-filter-button ${filter === "attention" ? "active" : ""}`} onClick={() => setFilter("attention")}>Требует внимания</button>
+        <button type="button" className={`log-filter-button ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>Все записи</button>
+        <span className="muted">Показано: {visibleLogs.length} из {logs.length}</span>
+      </div>
       <div className="table-wrap">
         <table>
           <thead><tr><th>Время</th><th>Уровень</th><th>Сообщение</th></tr></thead>
           <tbody>
-            {logs.map((log) => (
-              <tr key={log.id}>
-                <td>{new Date(log.created_at).toLocaleString()}</td>
-                <td><span className="pill">{log.level}</span></td>
+            {visibleLogs.map((log) => {
+              const presentation = describeLog(log);
+              const summary = summarizeLogContext(log.context ?? {});
+              return <tr key={log.id}>
+                <td>{formatDateTime(log.created_at)}</td>
+                <td><span className={`pill ${log.level.toUpperCase() === "ERROR" ? "sell" : log.level.toUpperCase() === "WARNING" ? "" : "buy"}`}>{translateLogLevel(log.level)}</span></td>
                 <td>
-                  <div>{log.message}</div>
-                  {contextSummary(log.context).length > 0 && <div className="log-context-summary">{contextSummary(log.context).join(" · ")}</div>}
-                  {Object.keys(log.context).length > 0 && (
-                    <details className="log-context-details">
-                      <summary>Детали записи</summary>
-                      <pre>{JSON.stringify(log.context, null, 2)}</pre>
-                    </details>
-                  )}
+                  <article className="log-card">
+                    <div className="log-card-heading">
+                      <strong>{presentation.title}</strong>
+                      {presentation.event && <code>{presentation.event}</code>}
+                    </div>
+                    <p>{presentation.explanation}</p>
+                  </article>
+                  {summary.length > 0 && <div className="log-context-summary">{summary.join(" · ")}</div>}
+                  <details className="log-context-details">
+                      <summary>{Object.keys(log.context).length > 0 ? "Понятные параметры записи" : "Оригинальное техническое сообщение"}</summary>
+                      <div className="log-original-message"><span>Исходное сообщение:</span> {log.message}</div>
+                      {Object.keys(log.context).length > 0 && <>
+                      <div className="log-context-grid">
+                        {Object.entries(log.context).map(([key, value]) => isLogScalar(value) ? (
+                          <div key={key}><span>{logFieldLabel(key)}</span><strong>{formatLogValue(key, value)}</strong></div>
+                        ) : null)}
+                      </div>
+                      <details className="log-technical-details">
+                        <summary>Технические поля для аудита</summary>
+                        <pre>{JSON.stringify(log.context, null, 2)}</pre>
+                      </details>
+                      </>}
+                  </details>
                 </td>
-              </tr>
-            ))}
-            {!logs.length && <EmptyRow cols={3} text="Логов пока нет" />}
+              </tr>;
+            })}
+            {!visibleLogs.length && <EmptyRow cols={3} text={logs.length ? "Нет записей в выбранном фильтре" : "Логов пока нет"} />}
           </tbody>
         </table>
       </div>
     </section>
   );
+}
+
+function describeLog(log: LogEntry) {
+  const context = log.context ?? {};
+  const event = typeof context.event === "string" ? context.event : "";
+  const gate = typeof context.gate === "string" ? ` Проверка: ${translateLogGate(context.gate)}.` : "";
+  const reason = typeof context.reason === "string" ? ` Причина: ${translateLogReason(context.reason)}.` : "";
+  const labels: Record<string, { title: string; explanation: string }> = {
+    ENTRY_CYCLE_BLOCKED: { title: "Новые входы временно остановлены", explanation: "Глобальная защита остановила текущий цикл, чтобы не увеличивать риск после слабых результатов." },
+    ENTRY_OPENED: { title: "Позиция открыта", explanation: "Все обязательные проверки входа пройдены. В параметрах ниже сохранены объём, риск, SL, TP и рыночные подтверждения." },
+    ENTRY_REJECTED: { title: "Ордер на вход не исполнен", explanation: "Сигнал был найден, но биржа не подтвердила исполнение безопасного объёма. Позиция не считается открытой." },
+    ENTRY_SKIPPED: { title: "Вход пропущен защитой", explanation: "Бот сознательно не открыл позицию: хотя бы один обязательный фильтр не дал разрешение." },
+    COMMITTEE_DECISION: { title: "Решение комитета агентов", explanation: "Независимые оценки направления и риска были объединены перед разрешением или блокировкой входа." },
+    POSITION_PARTIALLY_CLOSED: { title: "Часть позиции зафиксирована", explanation: "Бот частично зафиксировал результат, оставив остаток позиции под защитой стоп-лосса." },
+    POSITION_EXIT_PARTIALLY_FILLED: { title: "Выход исполнен частично", explanation: "Биржа исполнила только часть заявки на закрытие. Остаток позиции остаётся под управлением и контролем риска." },
+    POSITION_CLOSED: { title: "Позиция закрыта", explanation: "Итоговый выход записан вместе с причиной, ценой, комиссией и фактическим PnL." },
+    POSITION_CLOSE_FAILED: { title: "Закрытие позиции не подтверждено", explanation: "Биржа не сообщила корректное исполнение закрывающего ордера. Позиция не помечается закрытой без факта исполнения." },
+    POSITION_MANAGEMENT_PAUSED: { title: "Управление позицией временно приостановлено", explanation: "Есть незавершённый ордер либо недоступны необходимые данные. Бот не отправляет конфликтующие распоряжения." },
+    POSITION_PRICE_UNAVAILABLE: { title: "Нет безопасной цены для контроля позиции", explanation: "Проверка SL/TP остановлена для этого цикла, потому что текущая цена не была получена надёжно." },
+    POSITION_TICKER_SNAPSHOT_FAILED: { title: "Не получен тикер позиции", explanation: "Снимок текущей цены не получен. Повтор будет выполнен в следующем цикле без изменения позиции." },
+    POSITION_MARKET_SNAPSHOT_FAILED: { title: "Не получен рыночный снимок", explanation: "Дополнительные данные рынка недоступны. Бот сохраняет ошибку и не выдаёт их за нормальные данные." },
+    BREAKEVEN_APPLIED: { title: "Стоп перенесён в безубыток", explanation: "После подтверждённого движения позиции защита перенесена к цене безубытка с учётом сохранённого правила." },
+    BREAKEVEN_STOP_CONFIRMATION_PENDING: { title: "Подтверждение безубыточного стопа ожидается", explanation: "TP1 уже исполнен, но биржа ещё не подтвердила новый стоп. Локальный мониторинг контролирует возврат к цене защиты." },
+    DYNAMIC_TAKE_PROFIT_EXTENDED: { title: "Целевой TP продлён", explanation: "Импульс сохраняется, поэтому часть позиции удерживается по динамическому плану, а защитный стоп зафиксирован." },
+    DYNAMIC_TAKE_PROFIT_FAILED: { title: "Динамическая фиксация не исполнена", explanation: "Биржа не подтвердила операцию динамического TP. Позиция остаётся под существующей защитой до следующей проверки." },
+    PARTIAL_TAKE_PROFIT_FAILED: { title: "Частичный TP не исполнен", explanation: "Фиксация части позиции не подтверждена биржей. Объём позиции не считается уменьшенным без фактического исполнения." },
+    SECOND_TAKE_PROFIT_FILLED: { title: "Второй уровень прибыли исполнен", explanation: "Очередная часть позиции зафиксирована по плану каскадного выхода." },
+    SECOND_TAKE_PROFIT_FAILED: { title: "Второй уровень прибыли не исполнен", explanation: "Биржа не подтвердила TP2. Остаток позиции продолжает контролироваться текущим стопом." },
+    EMERGENCY_DRAWDOWN: { title: "Сработала аварийная защита просадки", explanation: "Новый риск остановлен, потому что достигнут установленный предел просадки." },
+    SCALE_OUT_CANCELLED_MIN_NOTIONAL: { title: "Каскадный TP заменён единым выходом", explanation: "Частичные заявки были бы ниже минимального объёма биржи. Бот не отправил ошибочные ордера." },
+    PROTECTIVE_STOP_CONFIRMED: { title: "Защитный стоп подтверждён биржей", explanation: "Для позиции создан или обновлён нативный защитный стоп. Его параметры сохранены в журнале." },
+    PROTECTIVE_STOP_UNCONFIRMED: { title: "Защитный стоп не подтверждён", explanation: "Биржа не подтвердила защитный ордер. Бот включает локальный мониторинг и отмечает состояние как требующее внимания." },
+    PROTECTIVE_STOP_CANCELLED: { title: "Предыдущий защитный стоп отменён", explanation: "Старый стоп отменён перед установкой обновлённой защиты, чтобы не осталось конфликтующих ордеров." },
+    STOP_SLIPPAGE_RECORDED: { title: "Зафиксировано проскальзывание стопа", explanation: "Фактическая цена стоп-исполнения отличается от ожидаемой. Значение сохранено для анализа и обучения." },
+    POST_MORTEM_CREATED: { title: "Создан разбор убыточной сделки", explanation: "Путь цены, MFE/MAE, исполнение и поведение стратегии сохранены для последующего анализа." },
+    POST_MORTEM_FAILED: { title: "Разбор сделки не создан", explanation: "Закрытие позиции не отменяется: не удалось сохранить дополнительный аналитический разбор." },
+    LEARNING_UPDATED: { title: "Результат учтён в обучении", explanation: "Факт закрытой сделки добавлен в память стратегии; это не означает автоматического изменения правил без проверок." },
+  };
+  const item = labels[event];
+  if (item) return { event, title: item.title, explanation: `${item.explanation}${gate}${reason}` };
+  if (event) return { event, title: "Системное торговое событие", explanation: `Бот сохранил структурированную запись для контроля и аудита.${gate}${reason}` };
+  return { event: "", title: "Техническая запись системы", explanation: "Это служебное сообщение без торгового кода события. Оригинальный текст и поля доступны в деталях." };
+}
+
+function isLogScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function summarizeLogContext(context: Record<string, unknown>) {
+  const keys = ["symbol", "side", "signal", "gate", "position_id", "pnl", "entry_price", "exit_price", "stop", "take", "risk_percent", "order_status", "exit_reason"];
+  return keys.flatMap((key) => isLogScalar(context[key]) ? [`${logFieldLabel(key)}: ${formatLogValue(key, context[key])}`] : []);
+}
+
+function logFieldLabel(key: string) {
+  const labels: Record<string, string> = {
+    event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок"
+  };
+  return labels[key] ?? key.replace(/_/g, " ");
+}
+
+function formatLogValue(key: string, value: string | number | boolean) {
+  if (typeof value === "boolean") return value ? "Да" : "Нет";
+  if (typeof value === "number") return ["pnl", "daily_pnl", "daily_risk_limit", "reserved_stop_risk", "candidate_stop_risk", "partial_profit", "exit_fee"].includes(key) ? `$${fmt(value)}` : fmt(value);
+  if (["side", "signal"].includes(key)) return translateAction(value);
+  if (["order_status", "execution_status", "exit_reason"].includes(key)) return translateStatus(value);
+  if (key === "gate") return translateLogGate(value);
+  if (key === "reason") return translateLogReason(value);
+  return value;
+}
+
+function translateLogLevel(value: string) {
+  return ({ INFO: "Инфо", WARNING: "Внимание", ERROR: "Ошибка" } as Record<string, string>)[value.toUpperCase()] ?? value;
+}
+
+function translateLogGate(value: string) {
+  const labels: Record<string, string> = {
+    PERFORMANCE_GUARD: "общая защита результатов", SYMBOL_GUARD: "защита торговой пары", DAILY_RISK_BUDGET: "дневной риск-лимит", PRETRADE_QUALITY: "проверка качества стратегии", MICROSTRUCTURE: "стакан и поток сделок", EXECUTION: "исполнение на бирже", MARKET_QUALITY: "ликвидность и качество рынка", COMMITTEE: "комитет агентов", PAPER_LEARNING: "учебный paper-режим", LEARNING_MEMORY: "память прошлых сделок", RL_GATE: "RL-проверка", COOLDOWN: "пауза после результата", DIRECTIONAL_EXPOSURE: "концентрация по направлению", EXPOSURE: "лимит экспозиции", MAX_POSITIONS: "лимит открытых позиций", POSITION_ALREADY_OPEN: "позиция по паре уже открыта", VOLUME_CONFIRMATION: "подтверждение объёмом", PRICE_EXTENSION: "слишком растянутый вход", MARKET_REGIME: "режим рынка", VOLATILITY: "волатильность", STRATEGY_WAIT: "стратегия не подтвердила вход", RISK_MANAGER: "менеджер риска", PRICE_DATA: "надёжность цены", ENTRY_RULES: "правила входа"
+  };
+  return labels[value] ?? value.replace(/_/g, " ");
+}
+
+function translateLogReason(value: string) {
+  if (/[А-Яа-яЁё]/.test(value)) return value;
+  const normalized = value.toLowerCase();
+  const matches: Array<[string, string]> = [
+    ["performance guard", "глобальная защита ограничила новые входы"],
+    ["symbol performance guard", "защита этой пары включила паузу или снижение риска"],
+    ["strategy wait", "стратегия не получила достаточного подтверждения направления"],
+    ["micro gate", "стакан и поток сделок не подтвердили вход"],
+    ["market quality", "ликвидность, спред или качество рынка не соответствуют правилам"],
+    ["pre-trade quality", "историческая walk-forward проверка не подтвердила качество"],
+    ["rl", "RL-модель не дала достаточного подтверждения"],
+    ["committee", "комитет агентов не набрал необходимый консенсус"],
+    ["cooldown", "действует обязательная пауза после результата"],
+    ["maximum open positions", "достигнут лимит одновременных позиций"],
+    ["position already open", "по этой паре уже есть открытая позиция"],
+    ["daily risk", "превышался бы дневной риск-лимит"],
+    ["exposure", "превышался бы лимит концентрации капитала"],
+    ["volume", "рассчитанный объём меньше допустимого или не подтверждён"],
+    ["not filled", "биржа не подтвердила исполнение"],
+  ];
+  return matches.find(([needle]) => normalized.includes(needle))?.[1] ?? "Техническая причина сохранена в полях аудита";
 }
 
 function SettingsView() {
@@ -2170,6 +2259,43 @@ function translateTradeResult(value: string) {
     BREAKEVEN: "Безубыток"
   };
   return labels[value] ?? value;
+}
+
+function translateRlModelStatus(status: string, isActive: boolean) {
+  if (isActive) return "Активна · прошла проверки";
+  const labels: Record<string, string> = {
+    SHADOW: "Тень · виртуальная проверка",
+    RETIRED: "Архив · заменена/исключена",
+    CANDIDATE: "Обучается",
+    REJECTED: "Отклонена проверками",
+    ACTIVE: "Активна"
+  };
+  return labels[status] ?? status;
+}
+
+function translateForwardStatus(value: string) {
+  const labels: Record<string, string> = {
+    PENDING: "Ожидает достаточных виртуальных сделок",
+    PASSED: "Пройдена",
+    FAILED: "Не пройдена",
+    NONE: "Не запускалась"
+  };
+  return labels[value] ?? value;
+}
+
+function translatePromotionReason(value: string) {
+  if (value === "passed") return "Все критерии validation пройдены";
+  const replacements: Array<[string, string]> = [
+    ["validation return below threshold", "доходность validation ниже порога"],
+    ["validation return underperformed buy-and-hold", "результат хуже стратегии buy-and-hold"],
+    ["too few profitable training seeds", "слишком мало успешных обучающих запусков"],
+    ["validation profit factor below threshold", "Profit Factor validation ниже порога"],
+    ["too few validation trades", "недостаточно сделок на validation"],
+    ["validation drawdown above threshold", "просадка validation превышает предел"],
+  ];
+  let translated = value;
+  for (const [source, target] of replacements) translated = translated.split(source).join(target);
+  return translated;
 }
 
 function translateLearningImpact(value: string) {

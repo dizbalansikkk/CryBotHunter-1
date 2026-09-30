@@ -24,11 +24,11 @@ def test_cycle_summary_makes_automatic_trade_attempt_visible():
 
     summary = _cycle_summary(scanned=2, opened=1, skipped=1, decisions=decisions, closed=1)
 
-    assert "Auto-trade cycle scanned=2 opened=1 skipped=1 closed=1" in summary
-    assert "learning_updates=1" in summary
-    assert "BTC/USDT=BUY/OPENED(91)" in summary
-    assert "directional=1" in summary
-    assert "top_opportunities" in summary
+    assert "Торговый цикл: проверено=2; открыто=1; пропущено=1; закрыто=1" in summary
+    assert "обновлений обучения=1" in summary
+    assert "BTC/USDT: сигнал=BUY, результат=OPENED, оценка=91" in summary
+    assert "направленных кандидатов=1" in summary
+    assert "кандидаты" in summary
 
 
 def test_cycle_metrics_expose_opportunity_flow_and_top_blocker(monkeypatch):

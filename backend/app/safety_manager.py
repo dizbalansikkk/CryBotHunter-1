@@ -114,7 +114,7 @@ class ShutdownController:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, self._handle_signal)
         self._installed = True
-        logger.info("Graceful shutdown handlers installed for SIGTERM and SIGINT")
+        logger.info("Установлены обработчики корректной остановки SIGTERM и SIGINT")
 
     def request(self, reason: str = "shutdown requested") -> None:
         self._signal_flag.set()
@@ -129,7 +129,7 @@ class ShutdownController:
     def _complete_request(self, reason: str) -> None:
         if self._event.is_set():
             return
-        logger.warning("Graceful shutdown requested: %s", reason)
+        logger.warning("Запрошена корректная остановка процесса: %s", reason)
         self._event.set()
 
     async def wait(self, timeout: float) -> bool:
@@ -159,23 +159,23 @@ class SafetyManager:
         config = self.load_environment(credentials)
         mode = "PAPER" if config.paper_trading else "LIVE"
         logger.info(
-            "Pre-flight starting process=%s exchange=%s market=%s mode=%s",
+            "Предстартовая проверка: процесс=%s биржа=%s рынок=%s режим=%s",
             config.process,
             config.exchange,
             config.market_type,
             mode,
         )
         if not config.enabled:
-            logger.warning("Pre-flight disabled by SAFETY_CHECK_ENABLED=false")
+            logger.warning("Предстартовая проверка отключена: SAFETY_CHECK_ENABLED=false")
             return SafetyReport(ok=True, exchange=config.exchange, process=config.process, mode=mode)
         if not config.paper_trading:
-            logger.warning("LIVE TRADING MODE IS ENABLED: real funds may be used")
+            logger.warning("ВКЛЮЧЁН LIVE-РЕЖИМ: могут использоваться реальные средства")
         elif not config.require_api_credentials:
-            logger.info("Paper/RL pre-flight uses public Binance endpoints; private credentials are not required")
+            logger.info("Paper/RL-проверка использует публичные данные Binance; приватные ключи не требуются")
 
         report = await self._probe_with_retry(config)
         logger.info(
-            "Pre-flight passed exchange=%s symbol=%s price=%s private_api=%s",
+            "Предстартовая проверка пройдена: биржа=%s пара=%s цена=%s приватный_API=%s",
             report.exchange,
             report.symbol,
             report.last_price,
@@ -191,7 +191,7 @@ class SafetyManager:
         except SafetyNetworkError as exc:
             if config is not None and config.paper_trading and not config.validate_private_api:
                 logger.error(
-                    "Paper pre-flight degraded: %s; starting worker so runtime cycles can retry safely",
+                    "Paper-проверка выполнена с ограничениями: %s; worker запущен, чтобы безопасно повторить проверку в следующих циклах",
                     self._safe_error(exc),
                 )
                 return SafetyReport(
@@ -200,10 +200,10 @@ class SafetyManager:
                     process=config.process,
                     mode="PAPER",
                 )
-            logger.critical("Pre-flight failed: %s", self._safe_error(exc))
+            logger.critical("Предстартовая проверка не пройдена: %s", self._safe_error(exc))
             sys.exit(1)
         except (SafetyCheckError, ValidationError, ValueError) as exc:
-            logger.critical("Pre-flight failed: %s", self._safe_error(exc))
+            logger.critical("Предстартовая проверка не пройдена: %s", self._safe_error(exc))
             sys.exit(1)
 
     def load_environment(self, credentials: SafetyCredentials | None = None) -> SafetyConfiguration:
@@ -248,7 +248,7 @@ class SafetyManager:
                         f"exchange network check exhausted {config.retry_attempts} attempts: {type(exc).__name__}"
                     ) from exc
                 logger.warning(
-                    "Pre-flight network attempt %s/%s failed (%s); retrying in %.1fs",
+                    "Сетевая проверка биржи не удалась, попытка %s/%s (%s); повтор через %.1f сек.",
                     attempt,
                     config.retry_attempts,
                     type(exc).__name__,
@@ -295,7 +295,7 @@ class SafetyManager:
                 try:
                     close()
                 except Exception:
-                    logger.exception("Failed to close pre-flight exchange session")
+                    logger.exception("Не удалось закрыть сессию биржи после предстартовой проверки")
 
     def _default_exchange_factory(self, config: SafetyConfiguration) -> ccxt.Exchange:
         exchange_class = getattr(ccxt, config.exchange, None)

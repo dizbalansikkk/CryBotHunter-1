@@ -100,12 +100,41 @@ async def position_chart(
             )
         ).scalars().all()
     )
+    aggregated_from_hourly = False
+    if not candles and timeframe in {"4h", "12h", "1d"}:
+        # Most installations retain the economical 1h history.  Aggregate
+        # those persisted OHLCV facts when a larger display interval was not
+        # ingested separately; never replace historical data with a fresh
+        # public-market path just to fill the chart.
+        hourly_candles = list(
+            (
+                await db.execute(
+                    select(Candle)
+                    .where(
+                        Candle.symbol == position.symbol,
+                        Candle.timeframe == "1h",
+                        Candle.timestamp >= start_at,
+                        Candle.timestamp <= end_at,
+                    )
+                    .order_by(Candle.timestamp.asc())
+                )
+            ).scalars().all()
+        )
+        candles = _aggregate_hourly_candles(hourly_candles, timeframe)
+        aggregated_from_hourly = bool(candles)
     sampled, sample_note = _downsample_candles(candles, _CHART_MAX_POINTS)
     if not sampled:
         data_note = (
             f"Недостаточно данных для отображения свечного графика: в локальной истории "
             f"нет сохранённых свечей {position.symbol} на таймфрейме {timeframe} в период сделки."
         )
+    elif aggregated_from_hourly:
+        data_note = (
+            f"Показаны {len(sampled)} свечей {timeframe}, агрегированных из сохранённых 1h-свечей; "
+            "OHLCV рассчитан только из локальной истории, без подмены данных биржей."
+        )
+        if sample_note:
+            data_note = f"{data_note} {sample_note}"
     elif sample_note:
         data_note = sample_note
     else:
@@ -199,6 +228,38 @@ def _downsample_candles(candles: list[Candle], limit: int) -> tuple[list[Candle]
     indices = sorted({round(index * step) for index in range(limit)})
     sampled = [candles[index] for index in indices]
     return sampled, f"Показано {len(sampled)} из {len(candles)} сохранённых свечей; ряд прорежен только для отображения."
+
+
+def _aggregate_hourly_candles(candles: list[Candle], timeframe: str) -> list[Candle]:
+    """Build larger visual candles strictly from persisted 1h OHLCV rows."""
+    interval_seconds = _CHART_TIMEFRAMES.get(timeframe)
+    if interval_seconds is None or interval_seconds <= _CHART_TIMEFRAMES["1h"]:
+        return []
+    buckets: dict[datetime, list[Candle]] = {}
+    for candle in candles:
+        timestamp = _as_utc(candle.timestamp)
+        bucket_epoch = int(timestamp.timestamp() // interval_seconds) * interval_seconds
+        bucket = datetime.fromtimestamp(bucket_epoch, tz=timezone.utc)
+        buckets.setdefault(bucket, []).append(candle)
+
+    aggregated: list[Candle] = []
+    for timestamp, rows in sorted(buckets.items()):
+        ordered = sorted(rows, key=lambda item: _as_utc(item.timestamp))
+        first, last = ordered[0], ordered[-1]
+        aggregated.append(
+            Candle(
+                symbol=first.symbol,
+                timeframe=timeframe,
+                timestamp=timestamp,
+                open=float(first.open),
+                high=max(float(item.high) for item in ordered),
+                low=min(float(item.low) for item in ordered),
+                close=float(last.close),
+                volume=sum(float(item.volume) for item in ordered),
+                source="aggregated_1h",
+            )
+        )
+    return aggregated
 
 
 def _positive_number(value: object) -> float | None:

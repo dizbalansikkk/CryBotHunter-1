@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.api.routes.positions import position_chart
+from app.api.routes.positions import _aggregate_hourly_candles, position_chart
 from app.models.entities import Candle, Position
 
 
@@ -118,3 +118,29 @@ async def test_trade_chart_accepts_requested_longer_timeframes(timeframe: str):
 
     assert chart.timeframe == timeframe
     assert chart.candles[0].timestamp == entered_at
+
+
+def test_trade_chart_aggregates_persisted_hourly_ohlcv_without_inventing_prices():
+    start = datetime(2026, 9, 28, 8, tzinfo=timezone.utc)
+    hourly = [
+        Candle(
+            symbol="ETH/USDT",
+            timeframe="1h",
+            timestamp=start + timedelta(hours=index),
+            open=100 + index,
+            high=103 + index,
+            low=98 + index,
+            close=101 + index,
+            volume=10 * (index + 1),
+            source="ccxt",
+        )
+        for index in range(4)
+    ]
+
+    aggregated = _aggregate_hourly_candles(hourly, "4h")
+
+    assert len(aggregated) == 1
+    assert aggregated[0].timestamp == start
+    assert (aggregated[0].open, aggregated[0].high, aggregated[0].low, aggregated[0].close) == (100, 106, 98, 104)
+    assert aggregated[0].volume == 100
+    assert aggregated[0].source == "aggregated_1h"

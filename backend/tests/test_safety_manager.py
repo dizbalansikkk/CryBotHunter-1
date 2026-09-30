@@ -215,7 +215,7 @@ async def test_paper_preflight_network_exhaustion_starts_degraded(monkeypatch, c
     assert report.ok is False
     assert report.mode == "PAPER"
     assert fake.time_calls == 2
-    assert "starting worker so runtime cycles can retry safely" in caplog.text
+    assert "worker запущен, чтобы безопасно повторить проверку" in caplog.text
 
 
 @pytest.mark.asyncio

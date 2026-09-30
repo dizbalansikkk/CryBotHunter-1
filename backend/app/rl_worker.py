@@ -23,14 +23,22 @@ async def main() -> None:
         return
 
     # Keep PyTorch and Stable Baselines3 out of memory until pre-flight passes.
-    from app.services.rl_training import RlTrainingInterrupted, RlTrainingService
+    try:
+        from app.services.rl_training import RlTrainingInterrupted, RlTrainingService
+    except ModuleNotFoundError as exc:
+        if exc.name == "stable_baselines3":
+            logger.critical(
+                "RL-worker не запущен: в образе нет stable-baselines3. "
+                "Проверьте, что Railway собрал текущую ветку main и завершил установку зависимостей."
+            )
+        raise
 
     settings = get_settings()
     trainer = RlTrainingService(stop_requested=lambda: shutdown.requested)
     locks = RedisLockManager()
     heartbeat = HeartbeatReporter("rl-worker")
     logger.info(
-        "RL worker started symbols=%s timeframes=%s loop=%ss max_training_per_cycle=%s",
+        "RL-worker запущен: пары=%s таймфреймы=%s цикл=%s сек. максимум обучений за цикл=%s",
         settings.rl_symbols,
         settings.candle_ingest_timeframes,
         settings.rl_prediction_loop_seconds,
@@ -46,7 +54,7 @@ async def main() -> None:
     if not schema_ready:
         await heartbeat.stop()
         await locks.close()
-        logger.info("RL worker stopped while waiting for database migration")
+        logger.info("RL-worker остановлен во время ожидания миграции базы данных")
         return
     async with AsyncSessionLocal() as db:
         retired = await trainer.retire_excluded_symbols(db, settings.trading_excluded_symbols)
@@ -61,7 +69,7 @@ async def main() -> None:
                     ),
                 )
             )
-            logger.info("Excluded RL state cleaned %s", retired)
+            logger.info("Очищено RL-состояние исключённых пар: %s", retired)
         await db.commit()
     while not shutdown.requested:
         cycle_started = perf_counter()
@@ -80,7 +88,7 @@ async def main() -> None:
         training_budget = max(int(settings.rl_training_max_per_cycle), 0)
         try:
             if not settings.rl_trainer_enabled:
-                logger.warning("RL worker disabled by RL_TRAINER_ENABLED=false")
+                logger.warning("RL-worker отключён: RL_TRAINER_ENABLED=false")
                 await heartbeat.set_status("DISABLED", {"enabled": False})
             else:
                 await heartbeat.set_status(
@@ -120,13 +128,13 @@ async def main() -> None:
                                         promotion_state = await trainer.evaluate_shadow_promotion(db, symbol, timeframe)
                                         if promotion_state == "PROMOTED":
                                             promoted += 1
-                                            logger.info("RL shadow promoted after forward test %s", key)
-                                            db.add(LogEntry(level="INFO", message=f"RL forward test promoted {key}"))
+                                            logger.info("RL-модель прошла виртуальную проверку и активирована: %s", key)
+                                            db.add(LogEntry(level="INFO", message=f"RL-модель активирована после forward-теста: {key}"))
                                             await db.commit()
                                         elif promotion_state == "REJECTED":
                                             rejected += 1
-                                            logger.info("RL shadow rejected after forward test %s", key)
-                                            db.add(LogEntry(level="WARNING", message=f"RL forward test rejected {key}"))
+                                            logger.info("RL-модель не прошла виртуальную проверку: %s", key)
+                                            db.add(LogEntry(level="WARNING", message=f"RL-модель не прошла forward-тест: {key}"))
                                             await db.commit()
                                         needs_training = await trainer.needs_refresh(db, symbol, timeframe)
                                         if needs_training and training_attempts < training_budget:
@@ -152,8 +160,8 @@ async def main() -> None:
                                                 shadowed += 1
                                                 shadow_decisions += 1
                                                 waiting += 1
-                                            logger.info("RL trained %s status=%s metrics=%s", key, model.status, model.metrics)
-                                            db.add(LogEntry(level="INFO", message=f"RL trained {key}: status={model.status}"))
+                                            logger.info("RL-модель обучена: %s статус=%s метрики=%s", key, model.status, model.metrics)
+                                            db.add(LogEntry(level="INFO", message=f"RL-модель обучена: {key}; статус={model.status}"))
                                             await db.commit()
                                         else:
                                             if needs_training:
@@ -171,11 +179,11 @@ async def main() -> None:
                                             decision, shadow_decision = await trainer.publish_decisions(db, symbol, timeframe)
                                             if decision:
                                                 decisions += 1
-                                                logger.info("RL decision %s action=%s confidence=%.2f", key, decision.action, decision.confidence)
+                                                logger.info("RL-решение: %s действие=%s уверенность=%.2f", key, decision.action, decision.confidence)
                                             if shadow_decision:
                                                 shadow_decisions += 1
                                                 logger.info(
-                                                    "RL shadow %s action=%s confidence=%.2f authority=false",
+                                                    "Теневое RL-решение: %s действие=%s уверенность=%.2f права на торговлю=нет",
                                                     key,
                                                     shadow_decision.action,
                                                     shadow_decision.confidence,
@@ -183,18 +191,18 @@ async def main() -> None:
                                             if not decision:
                                                 waiting += 1
                                     except RlTrainingInterrupted:
-                                        logger.info("RL training stopped by graceful shutdown")
+                                        logger.info("Обучение RL остановлено корректным завершением процесса")
                                         await db.rollback()
                                         break
                                     except Exception as exc:
                                         errors += 1
-                                        logger.exception("RL worker failed for %s", key)
+                                        logger.exception("Ошибка RL-worker для %s", key)
                                         await db.rollback()
-                                        db.add(LogEntry(level="ERROR", message=f"RL worker failed for {key}: {exc.__class__.__name__}"))
+                                        db.add(LogEntry(level="ERROR", message=f"Ошибка RL-worker для {key}: {exc.__class__.__name__}"))
                                         await db.commit()
                         else:
                             waiting = total_pairs
-                            logger.info("RL cycle skipped because another replica owns the loop lock")
+                            logger.info("Цикл RL пропущен: блокировка уже принадлежит другому экземпляру worker")
                 duration_seconds = round(perf_counter() - cycle_started, 2)
                 summary = {
                     "stage": "cycle_complete",
@@ -216,7 +224,7 @@ async def main() -> None:
                 }
                 await heartbeat.set_status("DEGRADED" if errors else "IDLE", summary)
                 logger.info(
-                    "RL cycle completed processed=%s/%s trained=%s promoted=%s shadowed=%s rejected=%s decisions=%s shadow_decisions=%s deferred=%s waiting=%s errors=%s duration=%.2fs",
+                    "Цикл RL завершён: обработано=%s/%s обучено=%s активировано=%s в-тени=%s отклонено=%s решений=%s теневых_решений=%s отложено=%s ожидает=%s ошибок=%s длительность=%.2f сек.",
                     processed,
                     total_pairs,
                     trained,
@@ -231,7 +239,7 @@ async def main() -> None:
                     duration_seconds,
                 )
         except Exception as exc:
-            logger.exception("RL worker loop failed")
+            logger.exception("Критическая ошибка цикла RL-worker")
             await heartbeat.set_status(
                 "ERROR",
                 {

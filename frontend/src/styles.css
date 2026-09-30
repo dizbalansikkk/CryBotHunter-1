@@ -87,6 +87,44 @@ button, input, select {
   color: var(--muted);
 }
 
+.log-filter {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.log-filter-button {
+  @apply rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors;
+  border-color: var(--line);
+  background: rgba(3, 20, 54, 0.72);
+  color: var(--muted);
+}
+
+.log-filter-button:hover, .log-filter-button.active {
+  border-color: rgba(84, 232, 255, 0.64);
+  background: rgba(84, 232, 255, 0.14);
+  color: var(--text);
+}
+
+.log-card-heading {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.log-card-heading strong {
+  color: var(--text);
+}
+
+.log-card-heading code {
+  @apply rounded px-1.5 py-0.5 text-[0.65rem];
+  background: rgba(84, 232, 255, 0.12);
+  color: var(--cyan);
+}
+
+.log-card p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
 .log-context-details {
   margin-top: 0.45rem;
   font-size: 0.75rem;
@@ -97,6 +135,58 @@ button, input, select {
   width: fit-content;
   cursor: pointer;
   color: var(--cyan);
+}
+
+.log-context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.log-original-message {
+  margin-top: 0.55rem;
+  padding: 0.5rem 0.6rem;
+  border-left: 2px solid rgba(84, 232, 255, 0.5);
+  background: rgba(3, 20, 54, 0.42);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.log-original-message span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.log-context-grid > div {
+  @apply rounded border px-2 py-1.5;
+  border-color: rgba(126, 238, 255, 0.16);
+  background: rgba(3, 20, 54, 0.45);
+}
+
+.log-context-grid span, .log-context-grid strong {
+  display: block;
+}
+
+.log-context-grid span {
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.log-context-grid strong {
+  margin-top: 0.1rem;
+  color: var(--text);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.log-technical-details {
+  margin-top: 0.6rem;
+}
+
+.table-explanation {
+  margin: -0.2rem 0 0.75rem;
+  font-size: 0.8rem;
 }
 
 .log-context-details pre {
