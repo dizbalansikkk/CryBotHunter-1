@@ -203,6 +203,8 @@ The strict strategy requires current 24-hour quote volume to reach `STRATEGY_MIN
 
 Live entry indicators use fully closed hourly candles; the active candle cannot create a temporary EMA, RSI, or MACD signal.
 
+`BINANCE_EVENT_PRIORITY_ENABLED=true` checks Binance's official announcement feed for dated Launchpool and Launchpad events that explicitly use BNB. A confirmed pre-event/active event moves `BNB/USDT` to the front of strategy analysis and adds only a ranking bonus (`FINAL_SCORE = STRATEGY_SCORE + EVENT_SCORE + MARKET_SCORE`). It never changes BUY/SELL direction, `STRATEGY_SCORE`, risk, leverage, stops, or position size. Missing, stale, contradictory, or malformed source data fails closed to `UNKNOWN` with `EVENT_SCORE=0`; a post-event bonus is retained only when multiple BNB volume/volatility/momentum confirmations are present. Every cycle persists a `BNB_EVENT_EVALUATED` audit record with the event schedule and score components.
+
 `SYMBOL_GUARD_*` adds a pair-level quarantine. After at least five closed trades, a pair whose recent win rate falls below 40% or whose recent net PnL is negative is paused for 24 hours. Its first retry is capped at 25% of normal risk, while healthy pairs remain eligible.
 
 `DYNAMIC_TAKE_PROFIT_*` turns the initial ATR/R:R take-profit into a conservative profit ladder. At each reached target the bot closes `DYNAMIC_TAKE_PROFIT_PARTIAL_CLOSE_PERCENT` of the remaining position, locks the stop one ATR-based step behind the realised target, and moves the next target forward by that same step. The stop can only tighten; after `DYNAMIC_TAKE_PROFIT_MAX_EXTENSIONS` the remaining volume closes at the target. Set `DYNAMIC_TAKE_PROFIT_ENABLED=false` to retain a fixed final take-profit.

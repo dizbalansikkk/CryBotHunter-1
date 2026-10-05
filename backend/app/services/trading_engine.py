@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.models.entities import AgentDecision, LogEntry, Order, OrderStatus, Position, Signal, Trade
 from app.schemas.dto import AgentAnalysisOut, MarketCoin, PositionUpdateOut, StrategySignal, TradingDecision, TradingRunOut, TradingTickOut
 from app.services.agents import AgentOrchestrator
+from app.services.binance_events import BnbPriorityDecision, BinanceEventAssessment, BinanceEventPriorityService
 from app.services.context_manager import ContextManager
 from app.services.control import TradingControlService
 from app.services.cooldown import LossCooldownGuard
@@ -46,6 +47,7 @@ class TradingEngine:
         self,
         exchange: ExchangeClient | None = None,
         control: TradingControlService | None = None,
+        event_priority: BinanceEventPriorityService | None = None,
     ) -> None:
         self.exchange = exchange or ExchangeClient()
         self.scanner = MarketScanner(self.exchange)
@@ -67,6 +69,7 @@ class TradingEngine:
         self.telegram = TelegramNotifier()
         self.context = ContextManager()
         self.control = control or TradingControlService()
+        self.event_priority = event_priority or BinanceEventPriorityService()
         self._owns_control = control is None
         self.settings = get_settings()
 
@@ -110,6 +113,23 @@ class TradingEngine:
             await db.commit()
             return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
         coins = await self.scanner.scan()
+        if self.settings.binance_event_priority_enabled:
+            bnb_event = await self.event_priority.assess()
+        else:
+            bnb_event = BinanceEventAssessment(
+                status="NORMAL",
+                event_score=0,
+                checked_at=datetime.now(timezone.utc),
+                reason="Binance event priority is disabled",
+            )
+        bnb_coin = next((coin for coin in coins if coin.symbol == "BNB/USDT"), None)
+        provisional_bnb_priority = (
+            self.event_priority.priority_decision(bnb_event, bnb_coin, 0)
+            if bnb_coin is not None
+            else None
+        )
+        if provisional_bnb_priority and provisional_bnb_priority.assessment.event_score > 0:
+            coins = sorted(coins, key=lambda coin: coin.symbol == "BNB/USDT", reverse=True)
         guard = await self.guard.evaluate(db)
         learning_lane_enabled = self._paper_learning_lane_enabled()
         if not guard.allowed and not learning_lane_enabled:
@@ -147,7 +167,31 @@ class TradingEngine:
         exploration_opened = 0
 
         ranked_coins = [(coin, self.strategy.evaluate(coin)) for coin in coins]
-        ranked_coins.sort(key=lambda item: self._opportunity_rank(item[0], item[1]), reverse=True)
+        bnb_priority: BnbPriorityDecision | None = None
+        if bnb_coin is not None:
+            bnb_signal = next(signal for coin, signal in ranked_coins if coin.symbol == "BNB/USDT")
+            bnb_priority = self.event_priority.priority_decision(bnb_event, bnb_coin, bnb_signal.score)
+        ranked_coins.sort(
+            key=lambda item: self._opportunity_rank(
+                item[0],
+                item[1],
+                bnb_priority if item[0].symbol == "BNB/USDT" else None,
+            ),
+            reverse=True,
+        )
+        event_context = bnb_priority.as_dict() if bnb_priority else bnb_event.as_dict()
+        self._log_trading_event(
+            db,
+            "INFO" if bnb_event.status != "UNKNOWN" else "WARNING",
+            "BNB_EVENT_EVALUATED",
+            (
+                f"BNB event status={event_context['status']} score={event_context['event_score']} "
+                f"final={event_context.get('final_score', 'n/a')}"
+            ),
+            cycle_id=cycle_id,
+            decision="PRIORITIZE" if bnb_priority and int(event_context["event_score"]) > 0 else "SKIP",
+            **event_context,
+        )
 
         for coin, original_signal in ranked_coins:
             signal, exploration = self._paper_exploration_signal(coin, original_signal)
@@ -1093,12 +1137,21 @@ class TradingEngine:
         )
         return position
 
-    def _opportunity_rank(self, coin: MarketCoin, signal: StrategySignal) -> tuple[int, int, int, int]:
+    def _opportunity_rank(
+        self,
+        coin: MarketCoin,
+        signal: StrategySignal,
+        bnb_priority: BnbPriorityDecision | None = None,
+    ) -> tuple[int, int, int, int, int]:
+        market_score = self.event_priority.market_score(coin)[0]
+        event_score = bnb_priority.assessment.event_score if bnb_priority else 0
+        final_score = bnb_priority.final_score if bnb_priority else int(signal.score) + market_score
         return (
             1 if signal.signal in {"BUY", "SELL"} else 0,
+            final_score,
             int(signal.score),
             int(coin.regime_score),
-            int(coin.rating),
+            event_score,
         )
 
     async def _capture_position_microstructure(self, position: Position) -> None:

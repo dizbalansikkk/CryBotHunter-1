@@ -145,6 +145,16 @@ class Settings(BaseSettings):
     market_quality_max_price_change_percent: float = 18.0
     market_quality_min_risk_multiplier: float = 0.5
     market_scan_concurrency: int = 3
+    binance_event_priority_enabled: bool = True
+    binance_event_cache_seconds: int = 300
+    binance_event_request_timeout_seconds: float = 8.0
+    binance_event_max_feed_pages: int = 10
+    binance_event_announcement_lookback_days: int = 45
+    binance_event_pre_event_hours: float = 48.0
+    binance_event_post_event_hours: float = 24.0
+    binance_event_high_impact_volume_ratio: float = 1.5
+    binance_event_high_impact_atr_percent: float = 4.0
+    binance_event_high_impact_price_change_percent: float = 5.0
     trading_excluded_symbols_raw: str = Field(
         default="BTC/USDT",
         validation_alias="TRADING_EXCLUDED_SYMBOLS",
