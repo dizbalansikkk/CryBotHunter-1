@@ -175,7 +175,7 @@ function AgentsView() {
         <div className="status-strip">
           <StatusItem label="Итоговое действие" value={translateAction(analysis.final_action)} good={analysis.approved} />
           <StatusItem label="Уверенность" value={`${fmt(analysis.final_confidence * 100)}%`} />
-          <StatusItem label="Консенсус" value={`${fmt(analysis.consensus_score * 100)}%`} good={analysis.consensus_score >= 0.66} />
+          <StatusItem label="Консенсус" value={`${fmt(analysis.consensus_score * 100)}%`} good={analysis.consensus_score >= 0.75} />
           <StatusItem label="Рыночный агент" value={translateAction(analysis.market.action)} good={analysis.market.action !== "WAIT"} />
           <StatusItem label="AI-советник" value={analysis.llm ? translateAction(analysis.llm.action) : "Выкл"} good={!analysis.llm || analysis.llm.action !== "WAIT"} />
         </div>
@@ -190,17 +190,19 @@ function AgentsView() {
           <div className="table-wrap">
             <div className="table-title">Торговый комитет</div>
             <table>
-              <thead><tr><th>Агент</th><th>Голос</th><th>Уверенность</th><th>Причина</th></tr></thead>
+              <thead><tr><th>Агент</th><th>Роль в соревновании</th><th>Рейтинг</th><th>Голос</th><th>Уверенность</th><th>Причина</th></tr></thead>
               <tbody>
                 {analysis.committee.map((item) => (
                   <tr key={item.agent_name}>
-                    <td>{item.agent_name}</td>
+                    <td>{translateAgentName(item.agent_name)}</td>
+                    <td>{translateCompetitionStatus(typeof item.context.competition_status === "string" ? item.context.competition_status : null)}</td>
+                    <td>{typeof item.context.performance_rating === "number" ? `${fmt(item.context.performance_rating * 100)}%` : "—"}</td>
                     <td><ActionPill action={item.action} /></td>
                     <td>{fmt(item.confidence * 100)}%</td>
                     <td>{item.rationale}</td>
                   </tr>
                 ))}
-                {!analysis.committee.length && <EmptyRow cols={4} text="Голосов комитета пока нет" />}
+                {!analysis.committee.length && <EmptyRow cols={6} text="Голосов комитета пока нет" />}
               </tbody>
             </table>
           </div>
@@ -214,7 +216,7 @@ function AgentsView() {
             {decisions.map((item, index) => (
               <tr key={`${item.agent_name}-${item.symbol}-${index}`}>
                 <td>{item.created_at ? new Date(item.created_at).toLocaleString("ru-RU") : "-"}</td>
-                <td>{item.agent_name}</td>
+                <td>{translateAgentName(item.agent_name)}</td>
                 <td>{item.symbol}</td>
                 <td><ActionPill action={item.action} /></td>
                 <td>{fmt(item.confidence * 100)}%</td>
@@ -232,7 +234,7 @@ function AgentsView() {
 function AgentCard({ decision }: { decision: AgentDecision }) {
   return (
     <div className="panel-block">
-      <div className="table-title">{decision.agent_name}</div>
+      <div className="table-title">{translateAgentName(decision.agent_name)}</div>
       <div className="agent-card-body">
         <ActionPill action={decision.action} />
         <Metric label="Уверенность" value={`${fmt(decision.confidence * 100)}%`} />
@@ -1077,11 +1079,15 @@ function AgentActivityTable({ activity }: { activity: AgentActivity | null }) {
     <div className="table-wrap">
       <div className="table-title">Как работают агенты</div>
       <table>
-        <thead><tr><th>Агент</th><th>Всего</th><th>24 часа</th><th>Средняя уверенность</th><th>BUY/SELL</th><th>ALLOW</th><th>BLOCK</th><th>WAIT</th><th>Последнее решение</th></tr></thead>
+        <thead><tr><th>Агент</th><th>Статус</th><th>Рейтинг качества</th><th>Обучающих исходов</th><th>Успешность</th><th>Всего решений</th><th>24 часа</th><th>Средняя уверенность</th><th>BUY/SELL</th><th>ALLOW</th><th>BLOCK</th><th>WAIT</th><th>Последнее решение</th></tr></thead>
         <tbody>
           {agents.map((item) => (
             <tr key={item.agent_name}>
-              <td className="font-semibold">{item.agent_name}</td>
+              <td className="font-semibold">{translateAgentName(item.agent_name)}</td>
+              <td>{translateCompetitionStatus(item.competition_status)}</td>
+              <td>{item.performance_rating == null ? "—" : `${fmt(item.performance_rating * 100)}%`}</td>
+              <td>{item.performance_observations || "—"}</td>
+              <td>{item.performance_win_rate == null ? "—" : `${fmt(item.performance_win_rate * 100)}%`}</td>
               <td>{item.decisions}</td>
               <td>{item.decisions_24h}</td>
               <td>{fmt(item.average_confidence * 100)}%</td>
@@ -1092,7 +1098,7 @@ function AgentActivityTable({ activity }: { activity: AgentActivity | null }) {
               <td>{item.last_seen_at ? `${new Date(item.last_seen_at).toLocaleString("ru-RU")} · ${item.last_symbol} · ${translateAction(item.last_action)}` : "-"}</td>
             </tr>
           ))}
-          {!agents.length && <EmptyRow cols={9} text="Агенты еще не накопили решений" />}
+          {!agents.length && <EmptyRow cols={13} text="Агенты еще не накопили решений" />}
         </tbody>
       </table>
     </div>
@@ -1338,6 +1344,7 @@ function LogsView() {
                     <p>{presentation.explanation}</p>
                   </article>
                   {summary.length > 0 && <div className="log-context-summary">{summary.join(" · ")}</div>}
+                  <AgentLogDetails context={log.context ?? {}} />
                   <details className="log-context-details">
                       <summary>{Object.keys(log.context).length > 0 ? "Понятные параметры записи" : "Оригинальное техническое сообщение"}</summary>
                       <div className="log-original-message"><span>Исходное сообщение:</span> {log.message}</div>
@@ -1399,11 +1406,34 @@ function describeLog(log: LogEntry) {
     POST_MORTEM_CREATED: { title: "Создан разбор убыточной сделки", explanation: "Путь цены, MFE/MAE, исполнение и поведение стратегии сохранены для последующего анализа." },
     POST_MORTEM_FAILED: { title: "Разбор сделки не создан", explanation: "Закрытие позиции не отменяется: не удалось сохранить дополнительный аналитический разбор." },
     LEARNING_UPDATED: { title: "Результат учтён в обучении", explanation: "Факт закрытой сделки добавлен в память стратегии; это не означает автоматического изменения правил без проверок." },
+    AGENT_LEARNING_UPDATED: { title: "Аналитики обучились на результате", explanation: "Прогноз каждого основного и теневого аналитика сопоставлен с фактическим PnL. Рейтинги обновлены плавно; при достаточной выборке лучший претендент может заменить основного аналитика." },
   };
   const item = labels[event];
   if (item) return { event, title: item.title, explanation: `${item.explanation}${gate}${reason}` };
   if (event) return { event, title: "Системное торговое событие", explanation: `Бот сохранил структурированную запись для контроля и аудита.${gate}${reason}` };
   return { event: "", title: "Техническая запись системы", explanation: "Это служебное сообщение без торгового кода события. Оригинальный текст и поля доступны в деталях." };
+}
+
+function AgentLogDetails({ context }: { context: Record<string, unknown> }) {
+  const steps = Array.isArray(context.agent_steps) ? context.agent_steps : [];
+  const results = Array.isArray(context.agent_results) ? context.agent_results : [];
+  if (!steps.length && !results.length) return null;
+  return (
+    <div className="log-context-summary">
+      {steps.map((raw, index) => {
+        const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+        return <div key={`step-${index}`}>
+          {translateAgentName(String(item["агент"] ?? "Агент"))}: {translateAction(String(item["действие"] ?? "—"))}, уверенность {fmt(Number(item["уверенность"] ?? 0) * 100)}%. {String(item["объяснение"] ?? "")}
+        </div>;
+      })}
+      {results.map((raw, index) => {
+        const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+        return <div key={`result-${index}`}>
+          {translateAgentName(String(item.agent ?? "Агент"))}: прогноз {item.success ? "подтверждён" : "не подтвердился"}, новый рейтинг {fmt(Number(item.rating ?? 0) * 100)}%, наблюдений {String(item.observations ?? 0)}.
+        </div>;
+      })}
+    </div>
+  );
 }
 
 function isLogScalar(value: unknown): value is string | number | boolean {
@@ -1417,7 +1447,7 @@ function summarizeLogContext(context: Record<string, unknown>) {
 
 function logFieldLabel(key: string) {
   const labels: Record<string, string> = {
-    event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок"
+    event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", explanation: "Подробное объяснение", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок", evaluated_agents: "Оценено аналитиков"
   };
   return labels[key] ?? key.replace(/_/g, " ");
 }
@@ -2158,6 +2188,35 @@ function exchangeLabel(value: string) {
     gateio: "Gate.io"
   };
   return labels[value] ?? value;
+}
+
+function translateAgentName(value: string) {
+  const labels: Record<string, string> = {
+    MarketAnalystAgent: "Главный рыночный аналитик",
+    LlmAdvisorAgent: "LLM-советник",
+    RiskSupervisorAgent: "Инспектор риска",
+    RegimeAgent: "Аналитик режима рынка",
+    TrendAgent: "Трендовый аналитик",
+    AdaptiveTrendAgent: "Адаптивный трендовый претендент",
+    MomentumAgent: "Аналитик импульса",
+    BreakoutAgent: "Аналитик пробоя-претендент",
+    LiquidityAgent: "Инспектор ликвидности",
+    VolatilityAgent: "Инспектор волатильности",
+    DataQualityAgent: "Инспектор качества данных",
+    EntryTimingAgent: "Инспектор тайминга входа",
+    MicrostructureAgent: "Аналитик микроструктуры",
+    TradeCommittee: "Торговый комитет",
+    AgentOrchestrator: "Оркестратор агентов",
+    PaperLearningScout: "Учебный разведчик",
+    PaperLearningRiskGate: "Учебный инспектор риска",
+    rl_policy: "Активная RL-модель",
+    rl_shadow: "Теневая RL-модель",
+  };
+  return labels[value] ?? value;
+}
+
+function translateCompetitionStatus(value?: string | null) {
+  return ({ CHAMPION: "Основной", CHALLENGER: "Претендент (в тени)", POOR: "Слабый аналитик" } as Record<string, string>)[value ?? ""] ?? "Защитный / базовый";
 }
 
 function translateAction(value: string) {

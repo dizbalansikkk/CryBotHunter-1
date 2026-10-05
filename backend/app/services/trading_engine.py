@@ -359,13 +359,29 @@ class TradingEngine:
             else:
                 candidate_notional = 0.0
             if accepted and not exploration:
-                committee = await self._committee_gate(db, coin, signal.signal, cycle_id=cycle_id)
+                committee = await self._committee_gate(
+                    db,
+                    coin,
+                    signal.signal,
+                    cycle_id=cycle_id,
+                    microstructure=entry_snapshot,
+                )
                 if committee and not self._committee_allows_signal(committee, signal.signal):
                     accepted = False
                     reason = (
                         f"committee rejected: final={committee.final_action}, "
                         f"consensus={committee.consensus_score:.2f}, confidence={committee.final_confidence:.2f}"
                     )
+                elif committee and committee.risk.action == "REDUCE_SIZE":
+                    multiplier = max(
+                        min(float(committee.risk.context.get("risk_multiplier") or 0.5), 1.0),
+                        0.0,
+                    )
+                    trade_settings = replace(
+                        trade_settings,
+                        risk_percent=round(trade_settings.risk_percent * multiplier, 4),
+                    )
+                    reason = f"{reason}; committee portfolio pressure reduced risk to {multiplier:.2f}x"
             if accepted:
                 position = await self._open_position(
                     db,
@@ -1077,6 +1093,10 @@ class TradingEngine:
                             "action": vote.action,
                             "confidence": round(float(vote.confidence), 4),
                             "rationale": vote.rationale,
+                            "competition_role": vote.context.get("competition_role"),
+                            "competition_status": vote.context.get("competition_status"),
+                            "performance_rating": vote.context.get("performance_rating"),
+                            "vote_weight": vote.context.get("vote_weight", 1.0),
                         }
                         for vote in agent_votes
                     ],
@@ -1298,17 +1318,30 @@ class TradingEngine:
         signal: str,
         *,
         cycle_id: str | None = None,
+        microstructure: dict | None = None,
     ) -> AgentAnalysisOut | None:
         if not self.settings.ai_committee_enabled or signal not in {"BUY", "SELL"}:
             return None
-        analysis = await self.agents.analyze_coin(db, coin)
+        analysis = await self.agents.analyze_coin(db, coin, microstructure=microstructure)
+        agent_steps = [
+            {
+                "агент": vote.agent_name,
+                "действие": vote.action,
+                "уверенность": round(float(vote.confidence), 4),
+                "объяснение": vote.rationale,
+                "статус_в_соревновании": vote.context.get("competition_status", "ЗАЩИТНЫЙ/БАЗОВЫЙ"),
+                "рейтинг": vote.context.get("performance_rating"),
+                "вес_голоса": vote.context.get("vote_weight", 1.0),
+            }
+            for vote in [analysis.market, *analysis.committee, analysis.risk]
+        ]
         self._log_trading_event(
             db,
             "INFO",
             "COMMITTEE_DECISION",
             (
-                f"AI committee {coin.symbol}: final={analysis.final_action}, "
-                f"consensus={analysis.consensus_score:.2f}, confidence={analysis.final_confidence:.2f}"
+                f"Комитет агентов завершил анализ {coin.symbol}: итог={analysis.final_action}, "
+                f"согласие={analysis.consensus_score:.0%}, уверенность={analysis.final_confidence:.0%}."
             ),
             cycle_id=cycle_id,
             symbol=coin.symbol,
@@ -1317,6 +1350,11 @@ class TradingEngine:
             approved=analysis.approved,
             consensus=round(float(analysis.consensus_score), 4),
             confidence=round(float(analysis.final_confidence), 4),
+            agent_steps=agent_steps,
+            explanation=(
+                "Каждый агент независимо проверил свою область. Основные аналитики получили взвешенный голос, "
+                "теневые претенденты сохранили прогноз для обучения без влияния на текущую сделку."
+            ),
         )
         return analysis
 
@@ -1929,6 +1967,7 @@ class TradingEngine:
                 error_type=type(exc).__name__,
             )
         await self.learning.record_closed_position(db, position, position.pnl, reason)
+        await self.agents.competition.record_closed_position(db, position)
         try:
             await self.context.remember_trade(
                 symbol=position.symbol,
@@ -1974,7 +2013,7 @@ class TradingEngine:
             db,
             "INFO",
             "LEARNING_UPDATED",
-            f"Learning updated from {position.symbol} #{position.id}: reason={reason}, pnl={position.pnl:.2f}",
+            f"Обучение обновлено по сделке {position.symbol} #{position.id}: причина выхода={reason}, PnL={position.pnl:.2f} USDT.",
             cycle_id=cycle_id,
             symbol=position.symbol,
             position_id=position.id,

@@ -170,6 +170,24 @@ class AgentDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AgentPerformance(Base):
+    __tablename__ = "agent_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True, default="CHALLENGER")
+    observations: Mapped[int] = mapped_column(Integer, default=0)
+    successful_predictions: Mapped[int] = mapped_column(Integer, default=0)
+    failed_predictions: Mapped[int] = mapped_column(Integer, default=0)
+    total_reward: Mapped[float] = mapped_column(Float, default=0.0)
+    ema_reward: Mapped[float] = mapped_column(Float, default=0.0)
+    rating: Mapped[float] = mapped_column(Float, default=0.5)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class StrategyOptimization(Base):
     __tablename__ = "strategy_optimizations"
 

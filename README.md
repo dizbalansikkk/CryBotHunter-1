@@ -84,7 +84,7 @@ LLM_PROVIDER=none
 OPENAI_API_KEY=
 LLM_MODEL=gpt-4.1-mini
 AI_COMMITTEE_ENABLED=true
-AI_COMMITTEE_MIN_CONSENSUS=0.66
+AI_COMMITTEE_MIN_CONSENSUS=0.75
 MAX_GROSS_EXPOSURE_PERCENT=300
 MAX_SYMBOL_EXPOSURE_PERCENT=100
 TRADING_EXCLUDED_SYMBOLS=BTC/USDT,DOGE/USDT,AVAX/USDT,NEAR/USDT,LTC/USDT,FET/USDT,XRP/USDT
@@ -153,7 +153,7 @@ SAFETY_RETRY_ATTEMPTS=5
 SAFETY_RETRY_INITIAL_SECONDS=2
 SAFETY_RETRY_MAX_SECONDS=30
 AI_COMMITTEE_ENABLED=true
-AI_COMMITTEE_MIN_CONSENSUS=0.66
+AI_COMMITTEE_MIN_CONSENSUS=0.75
 MAX_GROSS_EXPOSURE_PERCENT=300
 MAX_SYMBOL_EXPOSURE_PERCENT=100
 ```
@@ -395,6 +395,9 @@ Supported commands:
 - Creates structured post-mortems for every loss and distinguishes avoidable behavior from a correctly executed stop.
 - Publishes promoted PPO decisions through the shared database; the trading engine uses them only as a veto or risk reducer behind deterministic risk controls.
 - Provides safe AI Trade Committee decisions through `/api/v1/agents/analyze`; agents vote, veto weak setups, and audit every decision while deterministic risk checks remain the gate.
+- Runs online competition inside the trend and momentum roles: a shadow challenger observes the same setups, learns from closed-trade PnL and confidence calibration, earns a quality rating, and can replace a weaker champion only after at least 20 evaluated outcomes, a 10-point rating advantage, and a seven-day promotion cooldown. Safety veto agents are never displaced by this competition.
+- Requires calibrated support from at least two independent directional families. Correlated indicators from one family cannot manufacture consensus. Dedicated data-quality, entry-timing, liquidity, volatility, and microstructure agents retain hard veto authority without voting on direction.
+- Shows Russian agent names, detailed Russian rationales, per-agent committee steps, learning outcomes, quality ratings, and champion/challenger/weak-analyst status in the UI and structured logs.
 - Supports an optional OpenAI-backed LLM advisor behind `LLM_PROVIDER=openai`; disagreements force WAIT rather than increasing risk.
 - Provides panic/resume controls through API and Telegram.
 - Provides deep health checks through `/health/deep`.

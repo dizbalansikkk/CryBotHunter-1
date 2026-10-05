@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user
 from app.db.session import get_db
-from app.models.entities import AgentDecision, User
+from app.models.entities import AgentDecision, AgentPerformance, User
 from app.schemas.dto import AgentActivityOut, AgentAnalysisOut, AgentDecisionOut
 from app.services.agent_activity import AgentActivityService
 from app.services.agents import AgentOrchestrator
@@ -58,4 +58,5 @@ async def agent_activity(
             )
         ).scalars().all()
     )
-    return AgentActivityService().summarize(rows)
+    performances = list((await db.execute(select(AgentPerformance))).scalars().all())
+    return AgentActivityService().summarize(rows, performances=performances)

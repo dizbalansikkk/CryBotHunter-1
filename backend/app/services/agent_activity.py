@@ -1,12 +1,17 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from app.models.entities import AgentDecision
+from app.models.entities import AgentDecision, AgentPerformance
 from app.schemas.dto import AgentActivityItemOut, AgentActivityOut
 
 
 class AgentActivityService:
-    def summarize(self, decisions: list[AgentDecision], now: datetime | None = None) -> AgentActivityOut:
+    def summarize(
+        self,
+        decisions: list[AgentDecision],
+        now: datetime | None = None,
+        performances: list[AgentPerformance] | None = None,
+    ) -> AgentActivityOut:
         current_time = self._aware(now or datetime.now(timezone.utc))
         cutoff = current_time - timedelta(hours=24)
         grouped: dict[str, list[AgentDecision]] = defaultdict(list)
@@ -14,10 +19,12 @@ class AgentActivityService:
             grouped[decision.agent_name].append(decision)
 
         items: list[AgentActivityItemOut] = []
+        performance_by_name = {row.agent_name: row for row in performances or []}
         for name, rows in grouped.items():
             rows.sort(key=lambda row: self._aware(row.created_at), reverse=True)
             latest = rows[0]
             decisions_24h = sum(1 for row in rows if self._aware(row.created_at) >= cutoff)
+            performance = performance_by_name.get(name)
             items.append(
                 AgentActivityItemOut(
                     agent_name=name,
@@ -31,6 +38,15 @@ class AgentActivityService:
                     last_action=latest.action,
                     last_symbol=latest.symbol,
                     last_seen_at=latest.created_at,
+                    competition_role=performance.role if performance else None,
+                    competition_status=performance.status if performance else None,
+                    performance_rating=round(float(performance.rating), 4) if performance else None,
+                    performance_observations=int(performance.observations) if performance else 0,
+                    performance_win_rate=(
+                        round(performance.successful_predictions / performance.observations, 4)
+                        if performance and performance.observations
+                        else None
+                    ),
                 )
             )
         items.sort(key=lambda item: (item.decisions_24h, item.decisions), reverse=True)

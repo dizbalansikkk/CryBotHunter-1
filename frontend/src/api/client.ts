@@ -665,6 +665,11 @@ export type AgentActivityItem = {
   last_action: string;
   last_symbol: string;
   last_seen_at?: string | null;
+  competition_role?: string | null;
+  competition_status?: string | null;
+  performance_rating?: number | null;
+  performance_observations: number;
+  performance_win_rate?: number | null;
 };
 
 export type AgentActivity = {

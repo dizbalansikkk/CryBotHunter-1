@@ -147,7 +147,7 @@ class SystemStatusOut(BaseModel):
     panic_paused: bool = False
     panic_reason: str | None = None
     ai_committee_enabled: bool = True
-    ai_committee_min_consensus: float = 0.66
+    ai_committee_min_consensus: float = 0.75
     gross_exposure: float = 0
     gross_exposure_percent: float = 0
     max_gross_exposure_percent: float = 300
@@ -466,6 +466,11 @@ class AgentActivityItemOut(BaseModel):
     last_action: str
     last_symbol: str
     last_seen_at: datetime | None = None
+    competition_role: str | None = None
+    competition_status: str | None = None
+    performance_rating: float | None = None
+    performance_observations: int = 0
+    performance_win_rate: float | None = None
 
 
 class AgentActivityOut(BaseModel):
