@@ -111,6 +111,29 @@ class Settings(BaseSettings):
     symbol_guard_recovery_risk_multiplier: float = 0.25
     ai_committee_enabled: bool = True
     ai_committee_min_consensus: float = 0.75
+    advanced_agents_enabled: bool = True
+    advanced_agent_timeframes_raw: str = Field(
+        default="15m,1h,4h",
+        validation_alias="ADVANCED_AGENT_TIMEFRAMES",
+    )
+    advanced_agent_candle_limit: int = 80
+    advanced_agent_market_timeout_seconds: float = 10.0
+    portfolio_correlation_min_samples: int = 30
+    portfolio_correlation_reduce_threshold: float = 0.65
+    portfolio_correlation_block_threshold: float = 0.85
+    portfolio_correlation_risk_multiplier: float = 0.6
+    portfolio_correlation_missing_data_multiplier: float = 0.8
+    execution_cost_hard_max_bps: float = 60.0
+    execution_cost_hard_edge_fraction: float = 0.45
+    execution_cost_reduce_edge_fraction: float = 0.25
+    execution_cost_risk_multiplier: float = 0.65
+    cross_timeframe_min_available: int = 2
+    cross_timeframe_missing_data_multiplier: float = 0.75
+    cross_timeframe_mixed_risk_multiplier: float = 0.65
+    calibration_drift_min_outcomes: int = 10
+    calibration_drift_block_outcomes: int = 20
+    calibration_drift_risk_multiplier: float = 0.55
+    event_risk_multiplier: float = 0.6
     entry_microstructure_enabled: bool = True
     entry_microstructure_timeout_seconds: float = 8.0
     entry_microstructure_depth: int = 20
@@ -306,6 +329,10 @@ class Settings(BaseSettings):
     @property
     def candle_ingest_timeframes(self) -> list[str]:
         return _parse_csv(self.candle_ingest_timeframes_raw)
+
+    @property
+    def advanced_agent_timeframes(self) -> list[str]:
+        return _parse_csv(self.advanced_agent_timeframes_raw)
 
     @property
     def uses_live_market_data(self) -> bool:

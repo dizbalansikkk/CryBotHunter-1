@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -359,12 +360,17 @@ class TradingEngine:
             else:
                 candidate_notional = 0.0
             if accepted and not exploration:
+                timeframe_candles = await self._capture_advanced_timeframes(coin.symbol)
                 committee = await self._committee_gate(
                     db,
                     coin,
                     signal.signal,
                     cycle_id=cycle_id,
                     microstructure=entry_snapshot,
+                    timeframe=timeframe,
+                    timeframe_candles=timeframe_candles,
+                    candidate_notional=candidate_notional,
+                    event_context=event_context if coin.symbol == "BNB/USDT" else None,
                 )
                 if committee and not self._committee_allows_signal(committee, signal.signal):
                     accepted = False
@@ -1319,10 +1325,22 @@ class TradingEngine:
         *,
         cycle_id: str | None = None,
         microstructure: dict | None = None,
+        timeframe: str = "1h",
+        timeframe_candles: dict[str, list] | None = None,
+        candidate_notional: float = 0.0,
+        event_context: dict | None = None,
     ) -> AgentAnalysisOut | None:
         if not self.settings.ai_committee_enabled or signal not in {"BUY", "SELL"}:
             return None
-        analysis = await self.agents.analyze_coin(db, coin, microstructure=microstructure)
+        analysis = await self.agents.analyze_coin(
+            db,
+            coin,
+            microstructure=microstructure,
+            timeframe=timeframe,
+            timeframe_candles=timeframe_candles,
+            candidate_notional=candidate_notional,
+            event_context=event_context,
+        )
         agent_steps = [
             {
                 "агент": vote.agent_name,
@@ -1357,6 +1375,33 @@ class TradingEngine:
             ),
         )
         return analysis
+
+    async def _capture_advanced_timeframes(self, symbol: str) -> dict[str, list]:
+        if not self.settings.advanced_agents_enabled:
+            return {}
+        timeframes = list(dict.fromkeys(self.settings.advanced_agent_timeframes))
+        if not timeframes:
+            return {}
+        tasks = [
+            self.exchange.fetch_ohlcv(
+                symbol,
+                timeframe=timeframe,
+                limit=max(int(self.settings.advanced_agent_candle_limit), 55),
+            )
+            for timeframe in timeframes
+        ]
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=max(float(self.settings.advanced_agent_market_timeout_seconds), 1.0),
+            )
+        except TimeoutError:
+            return {}
+        return {
+            timeframe: rows
+            for timeframe, rows in zip(timeframes, results)
+            if isinstance(rows, list) and rows
+        }
 
     def _committee_allows_signal(self, analysis: AgentAnalysisOut, signal: str) -> bool:
         return (

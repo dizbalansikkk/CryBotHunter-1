@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.entities import AgentDecision, Position
 from app.schemas.dto import AgentAnalysisOut, AgentDecisionOut, MarketCoin
+from app.services.advanced_agents import (
+    CalibrationDriftAgent,
+    CrossTimeframeAgent,
+    EventRiskAgent,
+    ExecutionCostAgent,
+    PortfolioCorrelationAgent,
+)
 from app.services.agent_competition import AgentCompetitionService, CompetitionProfile
 from app.services.llm import LlmAdvisorProvider
 from app.services.market_scanner import MarketScanner
@@ -463,6 +471,11 @@ class AgentOrchestrator:
         ]
         self.challenger_agents = [AdaptiveTrendAgent(), BreakoutAgent()]
         self.competition = AgentCompetitionService()
+        self.portfolio_agent = PortfolioCorrelationAgent()
+        self.execution_cost_agent = ExecutionCostAgent()
+        self.cross_timeframe_agent = CrossTimeframeAgent()
+        self.calibration_agent = CalibrationDriftAgent()
+        self.event_risk_agent = EventRiskAgent()
 
     async def analyze(self, db: AsyncSession, symbol: str) -> AgentAnalysisOut:
         coins = await self.scanner.scan([symbol])
@@ -473,6 +486,11 @@ class AgentOrchestrator:
         db: AsyncSession,
         coin: MarketCoin,
         microstructure: dict | None = None,
+        *,
+        timeframe: str = "1h",
+        timeframe_candles: dict[str, list[Any]] | None = None,
+        candidate_notional: float = 0.0,
+        event_context: dict[str, Any] | None = None,
     ) -> AgentAnalysisOut:
         market = self.market_agent.decide(coin)
         llm = await self.llm_agent.decide(coin, market)
@@ -482,8 +500,19 @@ class AgentOrchestrator:
             for agent in [*self.committee_agents, *self.challenger_agents]
         ]
         committee.append(MicrostructureAgent().decide(coin, market.action, microstructure))
+        if self.settings.advanced_agents_enabled:
+            committee.extend(
+                [
+                    await self.portfolio_agent.decide(db, coin, market.action, timeframe),
+                    self.execution_cost_agent.decide(coin, microstructure, candidate_notional),
+                    self.cross_timeframe_agent.decide(coin, market.action, timeframe_candles),
+                    await self.calibration_agent.decide(db, coin),
+                    self.event_risk_agent.decide(coin, event_context),
+                ]
+            )
         candidate, consensus_score = self._committee_consensus(market, llm, committee)
         risk = await self.risk_agent.decide(db, candidate)
+        risk = self._apply_committee_risk_reduction(risk, committee)
         approved = candidate.action in {"BUY", "SELL"} and risk.action in {"ALLOW", "REDUCE_SIZE"}
         final_action = candidate.action if approved else "BLOCK" if risk.action == "BLOCK" else "WAIT"
         final_confidence = min(candidate.confidence, risk.confidence)
@@ -505,6 +534,43 @@ class AgentOrchestrator:
             final_action=final_action,
             final_confidence=round(final_confidence, 2),
             approved=approved,
+        )
+
+    def _apply_committee_risk_reduction(
+        self,
+        risk: AgentDecisionOut,
+        committee: list[AgentDecisionOut],
+    ) -> AgentDecisionOut:
+        if risk.action == "BLOCK":
+            return risk
+        reducers = [
+            decision
+            for decision in committee
+            if decision.action == "REDUCE_SIZE"
+            and 0 < float(decision.context.get("risk_multiplier") or 0.0) < 1
+        ]
+        if not reducers:
+            return risk
+        committee_multiplier = min(float(item.context["risk_multiplier"]) for item in reducers)
+        supervisor_multiplier = float(risk.context.get("risk_multiplier") or 1.0)
+        effective_multiplier = min(supervisor_multiplier, committee_multiplier)
+        context = dict(risk.context)
+        context.update(
+            {
+                "risk_multiplier": round(effective_multiplier, 4),
+                "risk_reduction_agents": [item.agent_name for item in reducers],
+            }
+        )
+        return risk.model_copy(
+            update={
+                "action": "REDUCE_SIZE",
+                "confidence": min(float(risk.confidence), min(float(item.confidence) for item in reducers)),
+                "rationale": (
+                    f"{risk.rationale} Дополнительное ограничение риска до {effective_multiplier:.2f}x: "
+                    f"{', '.join(item.agent_name for item in reducers)}."
+                ),
+                "context": context,
+            }
         )
 
     def _committee_consensus(

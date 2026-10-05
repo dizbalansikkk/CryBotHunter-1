@@ -3,6 +3,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.schemas.dto import AgentDecisionOut, MarketCoin
+from app.services.advanced_agents import (
+    CalibrationDriftAgent,
+    CrossTimeframeAgent,
+    EventRiskAgent,
+    ExecutionCostAgent,
+    PortfolioCorrelationAgent,
+)
 from app.services.agent_competition import CompetitionProfile
 from app.services.agents import (
     AgentOrchestrator,
@@ -287,3 +294,109 @@ def test_committee_requires_two_independent_directional_families():
     assert consensus == 1
     assert decision.action == "WAIT"
     assert decision.context["agreeing_families"] == ["TREND"]
+
+
+def test_portfolio_correlation_blocks_concentrated_same_direction_cluster():
+    candidate_returns = {index: index / 10_000 for index in range(40)}
+    series = {
+        "BTC/USDT": candidate_returns,
+        "ETH/USDT": candidate_returns,
+        "SOL/USDT": candidate_returns,
+    }
+    positions = [
+        SimpleNamespace(symbol="ETH/USDT", side="LONG", current_price=100, entry_price=90, volume=10),
+        SimpleNamespace(symbol="SOL/USDT", side="LONG", current_price=50, entry_price=45, volume=20),
+    ]
+
+    decision = PortfolioCorrelationAgent().evaluate(coin(), "BUY", positions, series)
+
+    assert decision.action == "BLOCK"
+    assert decision.context["clustered_positions"] == 2
+
+
+def test_execution_cost_agent_blocks_when_friction_consumes_expected_move():
+    decision = ExecutionCostAgent().decide(
+        coin(price=100, atr=0.2, spread_bps=70),
+        {"spread_bps": 70, "bid_depth_quote": 10_000, "ask_depth_quote": 10_000},
+        candidate_notional=2_000,
+    )
+
+    assert decision.action == "BLOCK"
+    assert decision.context["total_cost_bps"] > 60
+
+
+def test_cross_timeframe_agent_blocks_two_opposing_structures():
+    falling = [[index, 0, 0, 0, 200 - index, 0] for index in range(70)]
+    rising = [[index, 0, 0, 0, 100 + index, 0] for index in range(70)]
+
+    blocked = CrossTimeframeAgent().decide(
+        coin(),
+        "BUY",
+        {"15m": falling, "1h": falling, "4h": rising},
+    )
+
+    assert blocked.action == "BLOCK"
+    assert blocked.context["opposing_timeframes"] == 2
+
+
+def test_calibration_drift_blocks_sustained_recent_degradation():
+    outcomes = [(0.9, 0.0)] * 10 + [(0.8, 1.0)] * 10
+
+    decision = CalibrationDriftAgent().evaluate(coin(), outcomes)
+
+    assert decision.action == "BLOCK"
+    assert decision.context["recent_win_rate"] == 0
+    assert decision.context["drift"] == 1
+
+
+def test_event_risk_never_changes_risk_from_launchpool_alone():
+    decision = EventRiskAgent().decide(
+        coin(price_change_percent=2, volume_24h=1_600_000_000),
+        {"status": "ACTIVE", "event_score": 15},
+    )
+
+    assert decision.action == "ALLOW"
+    assert decision.context["risk_multiplier"] == 1
+
+
+def test_event_risk_blocks_confirmed_market_shock_with_extreme_funding():
+    decision = EventRiskAgent().decide(
+        coin(funding_rate=0.1, price_change_percent=14),
+        {"status": "NORMAL", "event_score": 0},
+    )
+
+    assert decision.action == "BLOCK"
+
+
+def test_orchestrator_applies_strictest_advanced_agent_risk_reduction():
+    risk = AgentDecisionOut(
+        agent_name="RiskSupervisorAgent",
+        symbol="BTC/USDT",
+        action="ALLOW",
+        confidence=0.9,
+        rationale="allowed",
+        context={"risk_multiplier": 1.0},
+    )
+    reducers = [
+        AgentDecisionOut(
+            agent_name="ExecutionCostAgent",
+            symbol="BTC/USDT",
+            action="REDUCE_SIZE",
+            confidence=0.8,
+            rationale="cost",
+            context={"risk_multiplier": 0.65},
+        ),
+        AgentDecisionOut(
+            agent_name="CalibrationDriftAgent",
+            symbol="BTC/USDT",
+            action="REDUCE_SIZE",
+            confidence=0.75,
+            rationale="drift",
+            context={"risk_multiplier": 0.55},
+        ),
+    ]
+
+    result = AgentOrchestrator()._apply_committee_risk_reduction(risk, reducers)
+
+    assert result.action == "REDUCE_SIZE"
+    assert result.context["risk_multiplier"] == 0.55
