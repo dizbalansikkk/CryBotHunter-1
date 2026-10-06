@@ -5,15 +5,19 @@ import {
   BarChart3,
   Bot,
   CheckCircle2,
+  ChevronRight,
   Download,
   KeyRound,
+  LayoutDashboard,
+  LineChart,
   LogOut,
   Play,
   RefreshCw,
   Save,
+  ScrollText,
   Settings,
   ShieldCheck,
-  Terminal,
+  Waves,
   XCircle
 } from "lucide-react";
 import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, Position, RlModel, ShadowTrade, StrategyOptimization, SystemStatus, TradeAnalytics, TradeChart, TradePostMortem, TradingAudit, TradingAuditDay, TradingAuditSymbol, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
@@ -89,33 +93,41 @@ function App() {
 
   return (
     <main className="app-shell">
-      <nav className="topbar">
-        <div className="topbar-inner">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
           <div className="brand-mark"><Bot size={20} /> CryBotHunter</div>
-          <div className="nav-group">
-            <NavButton active={view === "dashboard"} onClick={() => setView("dashboard")} icon={<Activity size={16} />} label="Панель" />
-            <NavButton active={view === "audit"} onClick={() => setView("audit")} icon={<BarChart3 size={16} />} label="Аудит 30д" />
-            <NavButton active={view === "market"} onClick={() => setView("market")} icon={<BarChart3 size={16} />} label="Рынок" />
-            <NavButton active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={16} />} label="Агенты" />
-            <NavButton active={view === "logs"} onClick={() => setView("logs")} icon={<Terminal size={16} />} label="Логи" />
-            <NavButton active={view === "settings"} onClick={() => setView("settings")} icon={<Settings size={16} />} label="Настройки" />
-            <button className="icon-btn" onClick={logout} title="Выйти"><LogOut size={16} /></button>
-          </div>
+          <span>AI trading workspace</span>
         </div>
-      </nav>
-      <div className="page">
-        {view === "dashboard" && <DashboardView />}
-        {view === "audit" && <TradingAuditView />}
-        {view === "market" && <MarketView />}
-        {view === "agents" && <AgentsView />}
-        {view === "logs" && <LogsView />}
-        {view === "settings" && <SettingsView />}
+        <nav className="sidebar-nav" aria-label="Основная навигация">
+          <NavButton active={view === "dashboard"} onClick={() => setView("dashboard")} icon={<LayoutDashboard size={18} />} label="Панель" description="Сводка и торговля" />
+          <NavButton active={view === "market"} onClick={() => setView("market")} icon={<LineChart size={18} />} label="Рынок" description="Монеты и сигналы" />
+          <NavButton active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={18} />} label="AI-агенты" description="Комитет решений" />
+          <NavButton active={view === "audit"} onClick={() => setView("audit")} icon={<BarChart3 size={18} />} label="Аудит 30 дней" description="Факты и результат" />
+          <NavButton active={view === "logs"} onClick={() => setView("logs")} icon={<ScrollText size={18} />} label="Журнал" description="События системы" />
+          <NavButton active={view === "settings"} onClick={() => setView("settings")} icon={<Settings size={18} />} label="Настройки" description="Риск и интеграции" />
+        </nav>
+        <div className="sidebar-footer">
+          <div className="ocean-status"><Waves size={17} /><span><strong>Рабочая область</strong><small>Мониторинг и управление</small></span></div>
+          <button className="logout-btn" onClick={logout}><LogOut size={17} /><span>Выйти</span></button>
+        </div>
+      </aside>
+      <div className="content-shell">
+        <div className="mobile-topbar"><div className="brand-mark"><Bot size={18} /> CryBotHunter</div></div>
+        <div className="page">
+          {view === "dashboard" && <DashboardView />}
+          {view === "audit" && <TradingAuditView />}
+          {view === "market" && <MarketView />}
+          {view === "agents" && <AgentsView />}
+          {view === "logs" && <LogsView />}
+          {view === "settings" && <SettingsView />}
+        </div>
       </div>
     </main>
   );
 }
 
 function AgentsView() {
+  const [tab, setTab] = React.useState<"overview" | "committee" | "history">("overview");
   const [analysis, setAnalysis] = React.useState<AgentAnalysis | null>(null);
   const [decisions, setDecisions] = React.useState<AgentDecision[]>([]);
   const [activity, setActivity] = React.useState<AgentActivity | null>(null);
@@ -146,6 +158,7 @@ function AgentsView() {
       const encodedSymbol = encodeURIComponent(symbol);
       const { data } = await api.post<AgentAnalysis>(`/agents/analyze?symbol=${encodedSymbol}`);
       setAnalysis(data);
+      setTab("committee");
       await load();
     } catch (err) {
       setError(readError(err));
@@ -162,8 +175,17 @@ function AgentsView() {
         </select>
         <button className="btn primary" onClick={analyze} disabled={loading}><Bot size={16} /> {loading ? "Анализирую" : `Анализ ${symbol}`}</button>
       </Header>
+      <SectionTabs
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: "overview", label: "Обзор", hint: "Активность" },
+          { value: "committee", label: "Комитет", hint: "Текущий анализ" },
+          { value: "history", label: "История", hint: "Последние решения" }
+        ]}
+      />
       {error && <Alert tone="danger" text={error} />}
-      <div className="metric-grid">
+      {tab === "overview" && <><div className="metric-grid">
         <Metric label="Всего решений агентов" value={String(activity?.total_decisions ?? 0)} />
         <Metric label="Решений за 24 часа" value={String(activity?.decisions_24h ?? 0)} />
         <Metric label="Активных агентов" value={String(activity?.active_agents ?? 0)} />
@@ -171,7 +193,9 @@ function AgentsView() {
         <Metric label="Последняя активность" value={activity?.last_decision_at ? new Date(activity.last_decision_at).toLocaleString("ru-RU") : "Нет данных"} />
       </div>
       <AgentActivityTable activity={activity} />
-      {analysis && (
+      </>}
+      {tab === "committee" && !analysis && <div className="empty-state"><Bot size={34} /><strong>Запусти анализ выбранной пары</strong><span>Здесь появятся голоса агентов, консенсус и решение риск-агента.</span></div>}
+      {tab === "committee" && analysis && (
         <div className="status-strip">
           <StatusItem label="Итоговое действие" value={translateAction(analysis.final_action)} good={analysis.approved} />
           <StatusItem label="Уверенность" value={`${fmt(analysis.final_confidence * 100)}%`} />
@@ -180,7 +204,7 @@ function AgentsView() {
           <StatusItem label="AI-советник" value={analysis.llm ? translateAction(analysis.llm.action) : "Выкл"} good={!analysis.llm || analysis.llm.action !== "WAIT"} />
         </div>
       )}
-      {analysis && (
+      {tab === "committee" && analysis && (
         <>
           <div className="two-col">
             <AgentCard decision={analysis.market} />
@@ -208,7 +232,7 @@ function AgentsView() {
           </div>
         </>
       )}
-      <div className="table-wrap">
+      {tab === "history" && <div className="table-wrap">
         <div className="table-title">Последние решения агентов</div>
         <table>
           <thead><tr><th>Время</th><th>Агент</th><th>Пара</th><th>Действие</th><th>Уверенность</th><th>Обоснование</th></tr></thead>
@@ -226,7 +250,7 @@ function AgentsView() {
             {!decisions.length && <EmptyRow cols={6} text="Решений агентов пока нет" />}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   );
 }
@@ -249,16 +273,41 @@ function ActionPill({ action }: { action: AgentDecision["action"] }) {
   return <span className={`pill ${tone}`}>{translateAction(action)}</span>;
 }
 
-function NavButton(props: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function NavButton(props: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; description?: string }) {
   return (
-    <button className={`nav ${props.active ? "active" : ""}`} onClick={props.onClick} title={props.label}>
-      {props.icon}
-      <span>{props.label}</span>
+    <button className={`nav ${props.active ? "active" : ""}`} onClick={props.onClick} title={props.label} aria-current={props.active ? "page" : undefined}>
+      <span className="nav-icon">{props.icon}</span>
+      <span className="nav-copy"><strong>{props.label}</strong>{props.description && <small>{props.description}</small>}</span>
+      <ChevronRight className="nav-chevron" size={15} />
     </button>
   );
 }
 
+function SectionTabs<T extends string>(props: {
+  value: T;
+  onChange: (value: T) => void;
+  items: Array<{ value: T; label: string; hint?: string }>;
+}) {
+  return (
+    <div className="section-tabs" role="tablist">
+      {props.items.map((item) => (
+        <button
+          key={item.value}
+          className={`section-tab ${props.value === item.value ? "active" : ""}`}
+          onClick={() => props.onChange(item.value)}
+          role="tab"
+          aria-selected={props.value === item.value}
+        >
+          <strong>{item.label}</strong>
+          {item.hint && <span>{item.hint}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DashboardView() {
+  const [tab, setTab] = React.useState<"overview" | "trading" | "learning" | "analytics">("overview");
   const [data, setData] = React.useState<Dashboard | null>(null);
   const [orders, setOrders] = React.useState<Order[]>([]);
   const [optimizations, setOptimizations] = React.useState<StrategyOptimization[]>([]);
@@ -419,15 +468,26 @@ function DashboardView() {
     <section className="space-y-5">
       <Header title="Панель" subtitle="Портфель, риск-состояние и сводка работы бота">
         <button className="btn" onClick={() => void load()} disabled={refreshing}><RefreshCw size={16} /> {refreshing ? "Обновляется" : "Обновить"}</button>
-        <button className="btn" onClick={loadHistoryAndBacktest} disabled={loading}><BarChart3 size={16} /> Бэктест ETH</button>
-        <button className="btn" onClick={runWalkForward} disabled={loading}><BarChart3 size={16} /> Walk-forward</button>
-        <button className="btn" onClick={ingestBatchHistory} disabled={loading}><RefreshCw size={16} /> Загрузить свечи</button>
-        <button className="btn" onClick={optimizeStrategy} disabled={loading}><Settings size={16} /> Оптимизировать</button>
-        <button className="btn" onClick={managePositions} disabled={loading}><Activity size={16} /> Проверить позиции</button>
-        <button className="btn primary" onClick={runTrading} disabled={loading}><Play size={16} /> {loading ? "Запуск" : "Сканировать"}</button>
+        {tab === "overview" && <button className="btn" onClick={managePositions} disabled={loading}><Activity size={16} /> Проверить позиции</button>}
+        {tab === "overview" && <button className="btn primary" onClick={runTrading} disabled={loading}><Play size={16} /> {loading ? "Запуск" : "Сканировать"}</button>}
+        {tab === "trading" && <button className="btn" onClick={loadHistoryAndBacktest} disabled={loading}><BarChart3 size={16} /> Бэктест ETH</button>}
+        {tab === "trading" && <button className="btn" onClick={runWalkForward} disabled={loading}><BarChart3 size={16} /> Walk-forward</button>}
+        {tab === "analytics" && <button className="btn" onClick={ingestBatchHistory} disabled={loading}><RefreshCw size={16} /> Загрузить свечи</button>}
+        {tab === "analytics" && <button className="btn primary" onClick={optimizeStrategy} disabled={loading}><Settings size={16} /> Оптимизировать</button>}
       </Header>
+      <SectionTabs
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: "overview", label: "Обзор", hint: "Баланс и риск" },
+          { value: "trading", label: "Торговля", hint: "Позиции и графики" },
+          { value: "learning", label: "Обучение", hint: "Агенты и модели" },
+          { value: "analytics", label: "Аналитика", hint: "Качество стратегии" }
+        ]}
+      />
       {error && <Alert tone="danger" text={error} />}
       {status?.exchange_error && <Alert tone="danger" text={`Биржа: ${status.exchange_error}`} />}
+      {tab === "overview" && <>
       <div className="status-strip">
         <StatusItem label="Режим" value={status?.paper_trading ? "Paper-торговля" : "Live-торговля"} good={status?.paper_trading ?? true} />
         <StatusItem
@@ -482,9 +542,9 @@ function DashboardView() {
         <Metric label="Win Rate за всё время" value={`${fmt(data?.analytics?.win_rate ?? data?.win_rate)}%`} />
         <Metric label="Закрыто сделок за всё время" value={String(data?.analytics?.closed_trades ?? data?.trades_count ?? 0)} />
       </div>
-      <LearningProgressPanel data={learningProgress} />
-      <ExperienceReplayPanel postMortems={postMortems} shadowTrades={shadowTrades} />
-      <TradeAnalyticsPanel analytics={data?.analytics ?? null} />
+      <PositionsTable data={data} onChanged={load} />
+      </>}
+      {tab === "trading" && <>
       {run && (
         <div className="panel-block">
           <div className="table-title">Последний запуск: просканировано {run.scanned}, открыто {run.opened}, пропущено {run.skipped}</div>
@@ -497,8 +557,9 @@ function DashboardView() {
           text={`Менеджер позиций проверил ${tick.checked}, закрыл ${tick.closed}, обновил ${tick.updated.length}.`}
         />
       )}
-      <div className="two-col">
-        <PositionsTable data={data} onChanged={load} />
+      <TradeChartsPanel />
+      <OrdersTable orders={orders} onChanged={load} />
+      <div className="single-focus-grid">
         <div className="panel-block">
           <div className="table-title">Бэктест</div>
           {historyResult && <p className="muted">Загружено {historyResult.inserted} новых свечей {historyResult.timeframe} для {historyResult.symbol}.</p>}
@@ -525,13 +586,19 @@ function DashboardView() {
           )}
         </div>
       </div>
-      <TradeChartsPanel />
-      <OrdersTable orders={orders} onChanged={load} />
+      </>}
+      {tab === "learning" && <>
+      <LearningProgressPanel data={learningProgress} />
+      <ExperienceReplayPanel postMortems={postMortems} shadowTrades={shadowTrades} />
       <LearningInsightsPanel data={learningInsights} />
       <LearningRulesTable items={learningRules} summary={learningSummary} />
       <RlModelsTable items={rlModels} />
+      </>}
+      {tab === "analytics" && <>
+      <TradeAnalyticsPanel analytics={data?.analytics ?? null} />
       <ReadinessTable items={readiness} batch={batchHistory} />
       <OptimizationTable items={optimizations} />
+      </>}
     </section>
   );
 }
