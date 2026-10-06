@@ -2,6 +2,17 @@
 
 MVP scaffold for an automated crypto trading system with FastAPI, PostgreSQL, Redis, React, Docker, market scoring, strategy evaluation, risk checks, paper trading, encrypted exchange credentials, logs, and ML/backtesting extension points.
 
+The primary trading venue is USDT-margined futures (`EXCHANGE_DEFAULT_TYPE=future`),
+with isolated margin and configured leverage of 2 (capped at 3). Paper trading
+remains enabled by default. Existing deployments must update their environment
+explicitly: a previously saved `EXCHANGE_DEFAULT_TYPE=spot` overrides defaults.
+
+Spot is optional and disabled by default (`SPOT_SECONDARY_ENABLED=false`).
+Disabled spot mode blocks new entries but allows existing positions to exit.
+There is no automatic fallback from futures to spot and no concurrent allocation
+between the two markets yet. Enable spot only after separately validating its
+strategy and accounting; the setting alone does not establish profitability.
+
 ## Stack
 
 - Backend: Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL, Redis, CCXT-ready services, Pandas, NumPy, APScheduler

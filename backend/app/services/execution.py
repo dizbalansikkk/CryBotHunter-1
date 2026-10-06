@@ -59,6 +59,29 @@ class ExecutionService:
         db.add(order)
         await db.flush()
         try:
+            reduce_only = reason.startswith("EXIT") or reason.startswith("PARTIAL_TAKE_PROFIT")
+            derivatives_check = getattr(self.exchange, "is_derivatives_market", None)
+            is_derivatives = (
+                bool(derivatives_check()) if callable(derivatives_check)
+                else self.settings.exchange_default_type in {"future", "futures", "swap"}
+            )
+            if not reduce_only and not is_derivatives and not self.settings.spot_secondary_enabled:
+                raise RuntimeError("Secondary spot entries are disabled; futures are the primary trading market.")
+            spot_short = side.lower() == "sell" and not reduce_only and not is_derivatives
+            if spot_short and self.settings.block_spot_short_entries and (
+                not self.settings.paper_trading or not self.settings.allow_paper_short_on_spot
+            ):
+                raise RuntimeError("Spot short entry is blocked; use a derivatives market or a LONG-only spot strategy.")
+            prepare_derivatives = getattr(self.exchange, "prepare_derivatives_symbol", None)
+            venue_setup = (
+                await prepare_derivatives(symbol)
+                if is_derivatives and callable(prepare_derivatives)
+                else {
+                    "market_type": getattr(self.exchange, "market_type", "spot"),
+                    "margin_mode": None,
+                    "leverage": 1,
+                }
+            )
             prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
             order.requested_amount = prepared_order.amount
             order.raw = {
@@ -69,13 +92,15 @@ class ExecutionService:
                     "min_cost": prepared_order.min_cost,
                     "available": prepared_order.metadata_available,
                 },
+                "venue_setup": venue_setup,
             }
             if self.settings.paper_trading:
                 self._fill_paper(order, reference_price, prepared_order)
             else:
-                reduce_only = reason.startswith("EXIT") or reason == "PARTIAL_TAKE_PROFIT"
                 if not reduce_only:
                     await self._assert_quote_balance(prepared_order.amount, reference_price)
+                elif side.lower() == "sell" and not is_derivatives:
+                    await self._assert_base_balance(symbol, prepared_order.amount)
                 raw = await self.exchange.create_order(
                     symbol,
                     side,
@@ -335,3 +360,12 @@ class ExecutionService:
         notional = abs(amount * reference_price)
         if notional > free_usdt * 0.98:
             raise RuntimeError(f"Insufficient free USDT balance for order notional: {notional:.4f} > {free_usdt:.4f}")
+
+    async def _assert_base_balance(self, symbol: str, amount: float) -> None:
+        free_balance = await self.exchange.get_free_balance()
+        base = symbol.split("/", 1)[0]
+        available = float(free_balance.get(base) or 0.0)
+        if amount > available * 1.000001:
+            raise RuntimeError(
+                f"Spot exit cannot sell more {base} than the free bot-visible balance: {amount:.8f} > {available:.8f}"
+            )

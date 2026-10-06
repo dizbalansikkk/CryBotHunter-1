@@ -71,6 +71,15 @@ class ExchangeClient:
         # metadata, consumes a large amount of request weight, and retains
         # sessions/market caches until shutdown.
         self._clients: dict[bool, ccxt.Exchange] = {}
+        self._derivatives_client: ccxt.Exchange | None = None
+        self._prepared_derivative_symbols: set[str] = set()
+
+    @property
+    def market_type(self) -> str:
+        return str(self.settings.exchange_default_type or "spot").strip().lower()
+
+    def is_derivatives_market(self) -> bool:
+        return self.market_type in self._DERIVATIVE_MARKET_TYPES
 
     @classmethod
     def from_user_settings(cls, settings: UserSettings) -> "ExchangeClient":
@@ -102,8 +111,18 @@ class ExchangeClient:
 
     async def fetch_tickers(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
         client = self._client(authenticated=False)
-        tickers = await asyncio.to_thread(client.fetch_tickers, symbols)
-        return {symbol: tickers[symbol] for symbol in symbols if symbol in tickers}
+
+        def fetch() -> dict[str, dict[str, Any]]:
+            client.load_markets()
+            resolved = {symbol: self._market_symbol(client, symbol) for symbol in symbols}
+            tickers = client.fetch_tickers(list(resolved.values()))
+            return {
+                original: tickers[venue_symbol]
+                for original, venue_symbol in resolved.items()
+                if venue_symbol in tickers
+            }
+
+        return await asyncio.to_thread(fetch)
 
     async def fetch_ohlcv(
         self,
@@ -113,25 +132,116 @@ class ExchangeClient:
         since: int | None = None,
     ) -> list[list[float]]:
         client = self._client(authenticated=False)
-        return await asyncio.to_thread(client.fetch_ohlcv, symbol, timeframe, since, limit)
+        return await asyncio.to_thread(
+            lambda: client.fetch_ohlcv(self._loaded_market_symbol(client, symbol), timeframe, since, limit)
+        )
 
     async def fetch_order_book(self, symbol: str, limit: int = 20) -> dict[str, Any]:
         client = self._client(authenticated=False)
-        return await asyncio.to_thread(client.fetch_order_book, symbol, max(int(limit), 5))
+        return await asyncio.to_thread(
+            lambda: client.fetch_order_book(self._loaded_market_symbol(client, symbol), max(int(limit), 5))
+        )
 
     async def fetch_trades(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
         client = self._client(authenticated=False)
-        return await asyncio.to_thread(client.fetch_trades, symbol, None, max(int(limit), 10))
+        return await asyncio.to_thread(
+            lambda: client.fetch_trades(self._loaded_market_symbol(client, symbol), None, max(int(limit), 10))
+        )
+
+    async def fetch_derivatives_context(self, symbol: str) -> dict[str, Any]:
+        """Fetch public perpetual context without changing the execution market."""
+        client = self._public_derivatives_client()
+
+        def fetch() -> dict[str, Any]:
+            client.load_markets()
+            derivative_symbol = self._derivative_symbol(client, symbol)
+            funding: dict[str, Any] = {}
+            interest: dict[str, Any] = {}
+            errors: list[str] = []
+            try:
+                if client.has.get("fetchFundingRate"):
+                    funding = client.fetch_funding_rate(derivative_symbol) or {}
+            except Exception as exc:
+                errors.append(f"funding:{type(exc).__name__}")
+            try:
+                if client.has.get("fetchOpenInterest"):
+                    interest = client.fetch_open_interest(derivative_symbol) or {}
+            except Exception as exc:
+                errors.append(f"open_interest:{type(exc).__name__}")
+            long_short_ratio = None
+            if self.exchange == "binance":
+                try:
+                    endpoint = getattr(client, "fapiDataGetGlobalLongShortAccountRatio", None)
+                    if callable(endpoint):
+                        market_id = str(client.market(derivative_symbol).get("id") or "")
+                        rows = endpoint({"symbol": market_id, "period": "5m", "limit": 1}) or []
+                        if rows:
+                            long_short_ratio = self._optional_number(rows[-1].get("longShortRatio"))
+                except Exception as exc:
+                    errors.append(f"long_short_ratio:{type(exc).__name__}")
+            funding_value = self._optional_number(funding.get("fundingRate"))
+            interest_value = self._optional_number(
+                interest.get("openInterestValue")
+                or interest.get("openInterestAmount")
+                or interest.get("openInterest")
+            )
+            return {
+                "status": "READY" if funding_value is not None or interest_value is not None else "UNKNOWN",
+                "symbol": derivative_symbol,
+                "funding_rate": funding_value,
+                "open_interest": interest_value,
+                "long_short_ratio": long_short_ratio,
+                "liquidation_notional": None,
+                "errors": errors,
+            }
+
+        return await asyncio.to_thread(fetch)
 
     async def prepare_order(self, symbol: str, amount: float, reference_price: float) -> PreparedOrder:
         return await asyncio.to_thread(self._prepare_order_sync, symbol, amount, reference_price)
+
+    async def prepare_derivatives_symbol(self, symbol: str) -> dict[str, Any]:
+        if not self.is_derivatives_market():
+            return {"market_type": self.market_type, "margin_mode": None, "leverage": 1}
+        leverage = min(
+            max(int(self.settings.futures_leverage), 1),
+            max(int(self.settings.futures_max_leverage), 1),
+        )
+        margin_mode = str(self.settings.futures_margin_mode or "isolated").lower()
+        if margin_mode not in {"isolated", "cross"}:
+            raise RuntimeError(f"Unsupported futures margin mode: {margin_mode}")
+        if self.settings.paper_trading or not self.settings.live_trading_enabled:
+            return {"market_type": self.market_type, "margin_mode": margin_mode, "leverage": leverage}
+        if symbol in self._prepared_derivative_symbols:
+            return {"market_type": self.market_type, "margin_mode": margin_mode, "leverage": leverage}
+        client = self._client(authenticated=True)
+
+        def configure() -> None:
+            venue_symbol = self._loaded_market_symbol(client, symbol)
+            if client.has.get("setMarginMode"):
+                try:
+                    client.set_margin_mode(margin_mode, venue_symbol)
+                except ccxt.ExchangeError as exc:
+                    if "no need to change margin type" not in str(exc).lower():
+                        raise
+            elif margin_mode == "isolated":
+                raise RuntimeError("Exchange cannot confirm isolated margin mode for this futures market.")
+            if client.has.get("setLeverage"):
+                client.set_leverage(leverage, venue_symbol)
+            else:
+                raise RuntimeError("Exchange cannot confirm leverage for this futures market.")
+
+        await asyncio.to_thread(configure)
+        self._prepared_derivative_symbols.add(symbol)
+        return {"market_type": self.market_type, "margin_mode": margin_mode, "leverage": leverage}
 
     def _prepare_order_sync(self, symbol: str, amount: float, reference_price: float) -> PreparedOrder:
         client = self._client(authenticated=False)
         try:
             client.load_markets()
-            market = client.market(symbol)
-            normalized_amount = self._amount_to_precision(client, symbol, amount)
+            venue_symbol = self._market_symbol(client, symbol)
+            market = client.market(venue_symbol)
+            normalized_amount = self._amount_to_precision(client, venue_symbol, amount)
             min_amount = self._nested_float(market, "limits", "amount", "min")
             min_cost = self._nested_float(market, "limits", "cost", "min")
             fee_rate = self._float_or_default(market.get("taker"), self.settings.paper_fee_rate)
@@ -168,8 +278,12 @@ class ExchangeClient:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING_ENABLED=true only after paper validation.")
         self._assert_live_safety()
         client = self._client(authenticated=True)
-        params = self._order_params(client_order_id=client_order_id, reduce_only=reduce_only)
-        return await asyncio.to_thread(client.create_order, symbol, order_type, side, amount, None, params)
+        venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
+        params = self._order_params(
+            client_order_id=client_order_id,
+            reduce_only=reduce_only and self.is_derivatives_market(),
+        )
+        return await asyncio.to_thread(client.create_order, venue_symbol, order_type, side, amount, None, params)
 
     def supports_native_protective_stops(self) -> bool:
         """Whether a reduce-only exchange stop can be used safely.
@@ -180,7 +294,7 @@ class ExchangeClient:
         derivatives all accept CCXT's ``stopLossPrice`` and ``reduceOnly``
         parameters.
         """
-        market_type = str(self.settings.exchange_default_type or "spot").lower()
+        market_type = self.market_type
         return (
             not self.settings.paper_trading
             and bool(getattr(self.settings, "native_protective_stops_enabled", True))
@@ -212,9 +326,10 @@ class ExchangeClient:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING_ENABLED=true only after paper validation.")
         self._assert_live_safety()
         client = self._client(authenticated=True)
+        venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
         params = self._order_params(client_order_id=client_order_id, reduce_only=True)
         params["stopLossPrice"] = stop_price
-        return await asyncio.to_thread(client.create_order, symbol, "market", side, amount, None, params)
+        return await asyncio.to_thread(client.create_order, venue_symbol, "market", side, amount, None, params)
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict[str, Any]:
         if self.settings.paper_trading:
@@ -223,7 +338,8 @@ class ExchangeClient:
             raise RuntimeError("Live trading is disabled.")
         self._assert_live_safety()
         client = self._client(authenticated=True)
-        return await asyncio.to_thread(client.cancel_order, order_id, symbol)
+        venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
+        return await asyncio.to_thread(client.cancel_order, order_id, venue_symbol)
 
     async def fetch_order(self, order_id: str, symbol: str) -> dict[str, Any]:
         if self.settings.paper_trading:
@@ -232,7 +348,8 @@ class ExchangeClient:
             raise RuntimeError("Live trading is disabled.")
         self._assert_live_safety()
         client = self._client(authenticated=True)
-        return await asyncio.to_thread(client.fetch_order, order_id, symbol)
+        venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
+        return await asyncio.to_thread(client.fetch_order, order_id, venue_symbol)
 
     def _client(self, authenticated: bool) -> ccxt.Exchange:
         cached = self._clients.get(authenticated)
@@ -270,6 +387,9 @@ class ExchangeClient:
 
     async def close(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
+        if self._derivatives_client is not None:
+            clients.append(self._derivatives_client)
+            self._derivatives_client = None
         for client in clients:
             close = getattr(client, "close", None)
             if not callable(close):
@@ -338,3 +458,41 @@ class ExchangeClient:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _public_derivatives_client(self) -> ccxt.Exchange:
+        if self._derivatives_client is not None:
+            return self._derivatives_client
+        exchange_class = getattr(ccxt, self.exchange, None)
+        if exchange_class is None:
+            raise RuntimeError(f"Unsupported exchange: {self.exchange}")
+        self._derivatives_client = exchange_class(
+            {"enableRateLimit": True, "options": {"defaultType": "swap"}}
+        )
+        return self._derivatives_client
+
+    def _derivative_symbol(self, client: ccxt.Exchange, symbol: str) -> str:
+        if symbol in client.markets and bool(client.markets[symbol].get("contract")):
+            return symbol
+        base, quote = symbol.split("/", 1)
+        for candidate in (f"{base}/{quote}:{quote}", symbol):
+            market = client.markets.get(candidate)
+            if market and bool(market.get("contract")):
+                return candidate
+        for candidate, market in client.markets.items():
+            if market.get("base") == base and market.get("quote") == quote and market.get("contract"):
+                return str(candidate)
+        raise RuntimeError(f"No derivatives market found for {symbol}")
+
+    def _loaded_market_symbol(self, client: ccxt.Exchange, symbol: str) -> str:
+        client.load_markets()
+        return self._market_symbol(client, symbol)
+
+    def _market_symbol(self, client: ccxt.Exchange, symbol: str) -> str:
+        return self._derivative_symbol(client, symbol) if self.is_derivatives_market() else symbol
+
+    def _optional_number(self, value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed and parsed not in {float("inf"), float("-inf")} else None

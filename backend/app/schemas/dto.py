@@ -138,7 +138,7 @@ class SystemStatusOut(BaseModel):
     exchange: str
     exchange_connected: bool = True
     exchange_error: str | None = None
-    exchange_market_type: str = "spot"
+    exchange_market_type: str = "future"
     exchange_sandbox_enabled: bool = True
     telegram_enabled: bool
     telegram_chat_count: int

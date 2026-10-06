@@ -1260,6 +1260,15 @@ class TradingEngine:
         daily_pnl: float,
         reserved_open_stop_risk: float,
     ) -> tuple[bool, str, float]:
+        if not self.exchange.is_derivatives_market() and not self.settings.spot_secondary_enabled:
+            return False, "secondary spot entries are disabled", 0.0
+        if (
+            signal == "SELL"
+            and not self.exchange.is_derivatives_market()
+            and self.settings.block_spot_short_entries
+            and (not self.settings.paper_trading or not self.settings.allow_paper_short_on_spot)
+        ):
+            return False, "spot market blocks short entries", 0.0
         side = "LONG" if signal == "BUY" else "SHORT"
         try:
             stop, _take, _initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)

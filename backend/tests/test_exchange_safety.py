@@ -6,6 +6,13 @@ from app.services.execution import ExecutionService
 
 
 class FakeMarketClient:
+    markets = {
+        "BTC/USDT:USDT": {
+            "contract": True, "linear": True, "quote": "USDT",
+            "base": "BTC", "settle": "USDT",
+        }
+    }
+
     def load_markets(self):
         return None
 

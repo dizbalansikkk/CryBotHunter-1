@@ -41,7 +41,18 @@ class Settings(BaseSettings):
 
     cors_origins_raw: str = Field(default="http://localhost:5173,http://localhost:8080", validation_alias="CORS_ORIGINS")
     default_exchange: str = "binance"
-    exchange_default_type: str = "spot"
+    # USDT-margined futures are the primary execution venue. Spot remains an
+    # independently validated secondary lane and is disabled by default.
+    exchange_default_type: str = "future"
+    primary_trading_market: str = "future"
+    futures_margin_mode: str = "isolated"
+    futures_leverage: int = 2
+    futures_max_leverage: int = 3
+    futures_min_liquidation_buffer_percent: float = 8.0
+    futures_require_native_stop: bool = True
+    spot_secondary_enabled: bool = False
+    block_spot_short_entries: bool = True
+    allow_paper_short_on_spot: bool = False
     paper_trading: bool = True
     # Virtual starting capital used only while execution is in paper mode.
     # It is independent from exchange credentials and gives the dashboard a

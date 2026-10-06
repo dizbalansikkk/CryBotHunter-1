@@ -40,6 +40,33 @@ class LowBalanceExchange:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("paper", [True, False])
+@pytest.mark.parametrize("side", ["buy", "sell"])
+async def test_disabled_secondary_spot_blocks_entries(monkeypatch, paper, side):
+    service = ExecutionService(LowBalanceExchange())
+    monkeypatch.setattr(service.settings, "exchange_default_type", "spot")
+    monkeypatch.setattr(service.settings, "spot_secondary_enabled", False)
+    monkeypatch.setattr(service.settings, "paper_trading", paper)
+    order = await service.execute_market(
+        Db(), "ETH/USDT", side, 1, 100, "ENTRY"
+    )
+    assert order.status == "FAILED"
+    assert "Secondary spot entries are disabled" in order.raw["message"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_secondary_spot_still_allows_paper_exit(monkeypatch):
+    service = ExecutionService(LowBalanceExchange())
+    monkeypatch.setattr(service.settings, "exchange_default_type", "spot")
+    monkeypatch.setattr(service.settings, "spot_secondary_enabled", False)
+    monkeypatch.setattr(service.settings, "paper_trading", True)
+    order = await service.execute_market(
+        Db(), "ETH/USDT", "sell", 1, 100, "EXIT_STOP_LOSS"
+    )
+    assert order.status == "FILLED"
+
+
+@pytest.mark.asyncio
 async def test_live_execution_blocks_entry_when_free_balance_is_too_low(monkeypatch):
     service = ExecutionService(LowBalanceExchange())
     monkeypatch.setattr(service.settings, "paper_trading", False)
