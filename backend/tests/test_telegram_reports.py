@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.models.entities import Position
 from app.schemas.dto import PositionUpdateOut, TradingDecision, TradingRunOut, TradingTickOut
 from app.services.system_health import ComponentHealth, SystemHealthSnapshot, WorkerHealth
-from app.services.telegram_daily import DailyPosition, DailyReportSnapshot
+from app.services.telegram_daily import DailyPeriodReport, DailyPosition, DailyReportSnapshot
 from app.services.telegram_reports import (
     format_cycle_report,
     format_daily_report,
@@ -246,6 +246,28 @@ def test_daily_report_is_detailed_and_readable():
         unhealthy_workers=("optimizer",),
         pending_notifications=3,
         failed_notifications=0,
+        report_date=date(2026, 7, 21),
+        periods=(
+            DailyPeriodReport(
+                label="00:00–07:00",
+                start_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+                end_at=datetime(2026, 7, 21, 7, tzinfo=timezone.utc),
+                opened=2,
+                closed=1,
+                wins=1,
+                losses=0,
+                win_rate=100,
+                gross_profit=4,
+                gross_loss=0,
+                net_pnl=4,
+                fees=0.12,
+                slippage=0.03,
+                long_entries=1,
+                short_entries=1,
+                symbols=("BTC/USDT", "ETH/USDT"),
+                exit_reasons=(("TAKE_PROFIT", 1),),
+            ),
+        ),
     )
 
     report = format_daily_report(snapshot)
@@ -256,4 +278,7 @@ def test_daily_report_is_detailed_and_readable():
     assert "Правил из сделок: <code>7</code>" in report
     assert "optimizer" in report
     assert "включает текущий плавающий результат" in report
+    assert "00:00–07:00" in report
+    assert "Реализованный PnL: <b>+4.00 USDT</b>" in report
+    assert "достигнут тейк-профит: 1" in report
     assert report.count("<b>") == report.count("</b>")

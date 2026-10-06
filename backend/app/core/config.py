@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     telegram_daily_report_enabled: bool = True
     telegram_daily_report_hour_utc: int = 18
     telegram_daily_report_minute_utc: int = 0
+    telegram_daily_report_timezone: str = "Europe/Simferopol"
+    telegram_daily_report_hour_local: int = 0
+    telegram_daily_report_minute_local: int = 5
     worker_heartbeat_enabled: bool = True
     worker_heartbeat_interval_seconds: int = 30
     worker_heartbeat_stale_seconds: int = 180

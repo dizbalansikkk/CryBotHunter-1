@@ -29,7 +29,7 @@ from app.services.pnl import PnlMetricsService
 from app.services.reconciliation import OrderReconciliationService
 from app.services.system_health import SystemHealthService
 from app.services.telegram_cards import safe_render_daily_report_card
-from app.services.telegram_daily import TelegramDailyReportService, daily_report_due
+from app.services.telegram_daily import TelegramDailyReportService, daily_report_due, daily_report_due_local
 from app.services.telegram_outbox import TelegramOutboxService
 from app.services.telegram_reports import (
     format_daily_report,
@@ -526,13 +526,26 @@ class TelegramPollingBot:
             current = current.replace(tzinfo=timezone.utc)
         else:
             current = current.astimezone(timezone.utc)
-        if not daily_report_due(
-            now=current,
-            last_report_date=self.last_daily_report_date,
-            hour_utc=self.settings.telegram_daily_report_hour_utc,
-            minute_utc=self.settings.telegram_daily_report_minute_utc,
-        ):
-            return
+        timezone_name = getattr(self.settings, "telegram_daily_report_timezone", None)
+        if timezone_name:
+            due, report_date = daily_report_due_local(
+                now=current,
+                last_report_date=self.last_daily_report_date,
+                timezone_name=timezone_name,
+                hour_local=getattr(self.settings, "telegram_daily_report_hour_local", 0),
+                minute_local=getattr(self.settings, "telegram_daily_report_minute_local", 5),
+            )
+            if not due:
+                return
+        else:
+            if not daily_report_due(
+                now=current,
+                last_report_date=self.last_daily_report_date,
+                hour_utc=self.settings.telegram_daily_report_hour_utc,
+                minute_utc=self.settings.telegram_daily_report_minute_utc,
+            ):
+                return
+            report_date = current.date()
         if (
             self.last_daily_report_attempt_at is not None
             and current - self.last_daily_report_attempt_at < timedelta(minutes=15)
@@ -541,20 +554,23 @@ class TelegramPollingBot:
         self.last_daily_report_attempt_at = current
         try:
             async with session_factory() as db:
-                snapshot = await self.daily_reports.snapshot(db, now=current)
+                if timezone_name:
+                    snapshot = await self.daily_reports.snapshot(db, now=current, report_date=report_date)
+                else:
+                    snapshot = await self.daily_reports.snapshot(db, now=current)
             report = format_daily_report(snapshot)
             await self.notifier.broadcast(
                 report,
                 photo=safe_render_daily_report_card(snapshot),
-                photo_filename=f"daily-report-{current:%Y-%m-%d}.jpg",
+                photo_filename=f"daily-report-{report_date:%Y-%m-%d}.jpg",
                 photo_caption=(
-                    f"<b>📊 CRYBOTHUNTER · ИТОГИ {current:%d.%m.%Y}</b>\n"
+                    f"<b>📊 CRYBOTHUNTER · ИТОГИ {report_date:%d.%m.%Y}</b>\n"
                     f"PnL за день: <b>{snapshot.pnl_day:+.2f} USDT</b>"
                 ),
-                dedupe_key=f"daily-report:{current:%Y-%m-%d}",
+                dedupe_key=f"daily-report:{report_date:%Y-%m-%d}",
             )
-            self.last_daily_report_date = current.date()
-            logger.info("Telegram daily report queued report_date=%s", current.date())
+            self.last_daily_report_date = report_date
+            logger.info("Telegram daily report queued report_date=%s", report_date)
         except Exception as exc:
             logger.warning("Telegram daily report failed error=%s", type(exc).__name__)
 

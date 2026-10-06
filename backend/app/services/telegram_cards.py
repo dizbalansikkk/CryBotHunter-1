@@ -217,21 +217,30 @@ def render_daily_report_card(snapshot: DailyReportSnapshot) -> bytes:
         draw,
         "PNL ЗА ДЕНЬ",
         f"{snapshot.pnl_day:+.2f} USDT",
-        f"открытых {len(snapshot.positions)} · закрыто сегодня {snapshot.closed_today}",
+        f"открытых {len(snapshot.positions)} · закрыто за сутки {snapshot.closed_today}",
         accent,
     )
-    metrics = [
-        ("ОТКРЫТЫЙ PNL", f"{snapshot.open_pnl:+.2f} USDT"),
-        ("ОБЩИЙ PNL", f"{snapshot.total_pnl:+.2f} USDT"),
-        ("ПРИБЫЛЬНЫХ СДЕЛОК", f"{snapshot.win_rate:.2f}%"),
-        ("ВОРКЕРЫ", f"{snapshot.healthy_workers} / {snapshot.total_workers}"),
-    ]
+    if len(snapshot.periods) == 3:
+        metrics = [
+            (snapshot.periods[0].label, f"{snapshot.periods[0].net_pnl:+.2f} USDT"),
+            (snapshot.periods[1].label, f"{snapshot.periods[1].net_pnl:+.2f} USDT"),
+            (snapshot.periods[2].label, f"{snapshot.periods[2].net_pnl:+.2f} USDT"),
+            ("ОТКРЫТЫЙ PNL", f"{snapshot.open_pnl:+.2f} USDT"),
+        ]
+    else:
+        metrics = [
+            ("ОТКРЫТЫЙ PNL", f"{snapshot.open_pnl:+.2f} USDT"),
+            ("ОБЩИЙ PNL", f"{snapshot.total_pnl:+.2f} USDT"),
+            ("ПРИБЫЛЬНЫХ СДЕЛОК", f"{snapshot.win_rate:.2f}%"),
+            ("ВОРКЕРЫ", f"{snapshot.healthy_workers} / {snapshot.total_workers}"),
+        ]
     _metric_grid(draw, metrics, accent)
     _footer(
         draw,
         (
             f"СДЕЛОК {snapshot.trades_count}  ·  ПРАВИЛ {snapshot.learning_rules}  ·  "
-            f"OUTBOX {snapshot.pending_notifications}  ·  {snapshot.generated_at:%d.%m.%Y %H:%M} UTC"
+            f"OUTBOX {snapshot.pending_notifications}  ·  "
+            f"{(snapshot.report_date or snapshot.generated_at.date()):%d.%m.%Y}"
         ),
     )
     return _encode(image)

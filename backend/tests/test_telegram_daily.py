@@ -5,7 +5,7 @@ import pytest
 
 from app.models.entities import Position
 from app.services.telegram_daily import TelegramDailyReportService
-from app.services.telegram_daily import daily_report_due
+from app.services.telegram_daily import daily_report_due, daily_report_due_local
 
 
 def test_daily_report_becomes_due_at_configured_utc_time():
@@ -36,6 +36,19 @@ def test_daily_report_is_not_due_twice_on_same_date():
         hour_utc=18,
         minute_utc=0,
     )
+
+
+def test_local_daily_report_targets_completed_simferopol_day():
+    due, report_date = daily_report_due_local(
+        now=datetime(2026, 7, 21, 21, 5, tzinfo=timezone.utc),
+        last_report_date=None,
+        timezone_name="Europe/Simferopol",
+        hour_local=0,
+        minute_local=5,
+    )
+
+    assert due is True
+    assert report_date == date(2026, 7, 21)
 
 
 class Result:
@@ -89,11 +102,16 @@ async def test_daily_snapshot_uses_real_portfolio_learning_queue_and_workers():
         SimpleNamespace(worker_name="trader", status="OK", last_seen_at=now - timedelta(seconds=10)),
         SimpleNamespace(worker_name="optimizer", status="ERROR", last_seen_at=now - timedelta(seconds=10)),
     ]
+    orders = [
+        SimpleNamespace(created_at=now - timedelta(hours=2), fee=0.15, slippage=0.05),
+        SimpleNamespace(created_at=now - timedelta(hours=3), fee=0.10, slippage=0.02),
+    ]
 
     class Db:
         def __init__(self):
             self.results = [
                 Result(rows=[opened, closed]),
+                Result(rows=orders),
                 Result(row=(3, 9)),
                 Result(scalar=1),
                 Result(scalar=2),
@@ -117,3 +135,8 @@ async def test_daily_snapshot_uses_real_portfolio_learning_queue_and_workers():
     assert snapshot.healthy_workers == 1
     assert snapshot.unhealthy_workers == ("optimizer",)
     assert snapshot.pending_notifications == 2
+    assert [period.label for period in snapshot.periods] == ["00:00–07:00", "07:00–14:00", "14:00–24:00"]
+    assert snapshot.periods[2].opened == 1
+    assert snapshot.periods[2].closed == 1
+    assert snapshot.periods[2].net_pnl == 5
+    assert snapshot.periods[2].fees == 0.25

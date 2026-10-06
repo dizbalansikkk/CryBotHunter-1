@@ -401,6 +401,7 @@ Supported commands:
 - Shows Russian agent names, detailed Russian rationales, per-agent committee steps, learning outcomes, quality ratings, and champion/challenger/weak-analyst status in the UI and structured logs.
 - Supports an optional OpenAI-backed LLM advisor behind `LLM_PROVIDER=openai`; disagreements force WAIT rather than increasing risk.
 - Provides panic/resume controls through API and Telegram.
+- Sends the completed daily Telegram report after local midnight in `Europe/Simferopol`, with separate `00:00–07:00`, `07:00–14:00`, and `14:00–24:00` sections covering entries, exits, wins/losses, realized PnL, fees, slippage, symbols, and exit reasons.
 - Provides deep health checks through `/health/deep`.
 - Blocks new entries through a performance guard when recent win rate, loss streak, or total profit falls below thresholds.
 - Automatically leaves a performance-guard deadlock after a cooldown by allowing one reduced-risk recovery position; a new loss starts the cooldown again.

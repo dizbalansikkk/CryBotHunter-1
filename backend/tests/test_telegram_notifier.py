@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import logging
 from types import SimpleNamespace
 
@@ -161,7 +161,7 @@ async def test_outbox_retry_does_not_duplicate_already_delivered_text():
 
 @pytest.mark.asyncio
 async def test_daily_report_is_queued_once_with_card_and_dedupe_key():
-    now = datetime(2026, 7, 21, 18, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 21, 21, 5, tzinfo=timezone.utc)
     snapshot = DailyReportSnapshot(
         generated_at=now,
         paper_trading=True,
@@ -191,7 +191,8 @@ async def test_daily_report_is_queued_once_with_card_and_dedupe_key():
             return None
 
     class Reports:
-        async def snapshot(self, _db, *, now):
+        async def snapshot(self, _db, *, now, report_date=None):
+            assert report_date == date(2026, 7, 21)
             return snapshot
 
     bot = TelegramPollingBot()
@@ -199,6 +200,9 @@ async def test_daily_report_is_queued_once_with_card_and_dedupe_key():
         telegram_daily_report_enabled=True,
         telegram_daily_report_hour_utc=18,
         telegram_daily_report_minute_utc=0,
+        telegram_daily_report_timezone="Europe/Simferopol",
+        telegram_daily_report_hour_local=0,
+        telegram_daily_report_minute_local=5,
     )
     bot.daily_reports = Reports()
     broadcasts = []

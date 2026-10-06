@@ -375,9 +375,35 @@ def format_daily_report(snapshot: DailyReportSnapshot) -> str:
         position_lines.append("Открытых позиций нет.")
     if len(snapshot.positions) > 8:
         position_lines.append(f"…и ещё {len(snapshot.positions) - 8}")
+    period_lines: list[str] = []
+    for period in snapshot.periods:
+        reasons = ", ".join(
+            f"{EXIT_REASON_LABELS.get(reason, reason)}: {count}"
+            for reason, count in period.exit_reasons
+        ) or "закрытий нет"
+        symbols = ", ".join(period.symbols) or "нет"
+        period_lines.append(
+            f"<b>⏱ {period.label}</b>\n"
+            f"├ Открыто: <code>{period.opened}</code> "
+            f"(LONG {period.long_entries} / SHORT {period.short_entries})\n"
+            f"├ Закрыто: <code>{period.closed}</code> · W/L {period.wins}/{period.losses} · "
+            f"win rate {period.win_rate:.2f}%\n"
+            f"├ Реализованный PnL: <b>{period.net_pnl:+.2f} USDT</b> "
+            f"(+{period.gross_profit:.2f} / -{period.gross_loss:.2f})\n"
+            f"├ Комиссии: <code>{period.fees:.4f} USDT</code> · "
+            f"проскальзывание: <code>{period.slippage:.4f} USDT</code>\n"
+            f"├ Пары: <code>{_html(symbols)}</code>\n"
+            f"└ Выходы: {_html(reasons)}"
+        )
+    if not period_lines:
+        period_lines.append("Временные срезы пока недоступны.")
+    report_date = snapshot.report_date or snapshot.generated_at.date()
     return (
         f"<b>{result_icon} ЕЖЕДНЕВНЫЙ ОТЧЁТ · CRYBOTHUNTER</b>\n"
-        f"<code>{mode}</code>\n\n"
+        f"<code>{mode} · {report_date:%d.%m.%Y} · {_html(snapshot.timezone_name)}</code>\n\n"
+        "<b>Срезы суток</b>\n"
+        + "\n\n".join(period_lines)
+        + "\n\n"
         "<b>Результат портфеля</b>\n"
         f"├ PnL за день: <b>{snapshot.pnl_day:+.2f} USDT</b>\n"
         f"├ PnL за 7 дней: <code>{snapshot.pnl_week:+.2f} USDT</code>\n"
@@ -396,8 +422,9 @@ def format_daily_report(snapshot: DailyReportSnapshot) -> str:
         f"├ Воркеры: <code>{_html(worker_state)}</code>\n"
         f"├ Telegram в очереди: <code>{snapshot.pending_notifications}</code>\n"
         f"└ Ошибок доставки: <code>{snapshot.failed_notifications}</code>\n\n"
-        f"<i>Снимок на {snapshot.generated_at:%d.%m.%Y %H:%M} UTC. "
-        "PnL за день включает текущий плавающий результат открытых позиций.</i>"
+        f"<i>Отчёт сформирован {snapshot.generated_at:%d.%m.%Y %H:%M} UTC. "
+        "PnL каждого среза — реализованный результат закрытых в нём позиций; "
+        "общий PnL за день также включает текущий плавающий результат.</i>"
     )
 
 
