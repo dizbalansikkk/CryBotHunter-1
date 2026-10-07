@@ -63,9 +63,9 @@ async def main() -> None:
                 LogEntry(
                     level="INFO",
                     message=(
-                        f"Excluded RL symbols retired={retired['models_retired']} "
-                        f"shadow_closed={retired['shadow_trades_closed']} "
-                        f"symbols={settings.trading_excluded_symbols}"
+                        f"Исключённые RL-пары очищены: моделей выведено={retired['models_retired']}; "
+                        f"теневых сделок закрыто={retired['shadow_trades_closed']}; "
+                        f"пары={settings.trading_excluded_symbols}"
                     ),
                 )
             )
@@ -255,7 +255,7 @@ async def main() -> None:
             break
     await heartbeat.stop()
     await locks.close()
-    logger.info("RL worker shutdown complete")
+    logger.info("RL-воркер корректно завершил работу")
 
 
 if __name__ == "__main__":

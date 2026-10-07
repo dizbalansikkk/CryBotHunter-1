@@ -289,6 +289,74 @@ class LearningRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class EquitySnapshot(Base):
+    __tablename__ = "equity_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="BOT_LEDGER")
+    total_equity: Mapped[float] = mapped_column(Float)
+    free_equity: Mapped[float] = mapped_column(Float)
+    reserved_equity: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    unrealized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    open_stop_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    gross_exposure: Mapped[float] = mapped_column(Float, default=0.0)
+    net_exposure: Mapped[float] = mapped_column(Float, default=0.0)
+    peak_equity: Mapped[float] = mapped_column(Float)
+    drawdown_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
+
+
+class MarketDerivativeSnapshot(Base):
+    __tablename__ = "market_derivative_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    funding_rate: Mapped[float | None] = mapped_column(Float)
+    open_interest: Mapped[float | None] = mapped_column(Float)
+    open_interest_change_percent: Mapped[float | None] = mapped_column(Float)
+    long_short_ratio: Mapped[float | None] = mapped_column(Float)
+    liquidation_notional: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), default="CCXT_DERIVATIVES")
+    status: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
+
+
+class SignalObservation(Base):
+    __tablename__ = "signal_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cycle_id: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    signal: Mapped[str] = mapped_column(String(8))
+    strategy_score: Mapped[int] = mapped_column(Integer)
+    final_score: Mapped[float] = mapped_column(Float)
+    action: Mapped[str] = mapped_column(String(16), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    reference_price: Mapped[float] = mapped_column(Float)
+    regime: Mapped[str] = mapped_column(String(32), index=True, default="UNKNOWN")
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    horizon_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    outcome_price: Mapped[float | None] = mapped_column(Float)
+    outcome_return_percent: Mapped[float | None] = mapped_column(Float)
+    resolved: Mapped[bool] = mapped_column(Boolean, index=True, default=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
+
+
+class StrategyRelease(Base):
+    __tablename__ = "strategy_releases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), index=True)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), index=True)
+    environment: Mapped[str] = mapped_column(String(32))
+    config_hash: Mapped[str] = mapped_column(String(64))
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict)
+    deployed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
+
+
 class LogEntry(Base):
     __tablename__ = "logs"
 

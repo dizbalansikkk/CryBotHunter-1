@@ -787,6 +787,9 @@ async def test_drawdown_limit_activates_only_close_and_critical_notification():
 
     engine = TradingEngine()
     engine.settings = SimpleNamespace(max_drawdown_percent=5)
+    # This test exercises legacy accounting when snapshots are disabled.
+    from unittest.mock import AsyncMock
+    engine.portfolio_accounting.capture = AsyncMock(return_value=None)
     engine.control = Control()
     engine.telegram = Telegram()
     db = Db()

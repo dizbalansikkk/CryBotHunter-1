@@ -442,7 +442,7 @@ class EventRiskAgent:
         except (TypeError, ValueError):
             oi_change_value = 0.0
         volume_ratio = coin.volume_24h / coin.volume_average_24h if coin.volume_average_24h > 0 else 1.0
-        extreme_funding = abs(float(coin.funding_rate)) > 0.08
+        extreme_funding = abs(float(coin.funding_rate)) > float(self.settings.extreme_funding_rate_abs)
         shock = abs(float(coin.price_change_percent)) >= 12 or volume_ratio >= 3 or oi_change_value >= 25
 
         if extreme_funding and shock:

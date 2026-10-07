@@ -319,6 +319,8 @@ export type BacktestReport = {
   average_loss: number;
   trades_count: number;
   total_profit: number;
+  sortino_ratio: number;
+  calmar_ratio: number;
 };
 
 export type WalkForwardReport = {

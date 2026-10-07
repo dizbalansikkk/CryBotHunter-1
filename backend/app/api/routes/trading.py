@@ -56,7 +56,7 @@ async def run_once(user: User = Depends(current_user), db: AsyncSession = Depend
             try:
                 return await engine.run_once(db, risk_settings, timeframe=user_settings.scan_interval)
             except Exception as exc:
-                logger.exception("Trading scan failed")
+                logger.exception("Торговое сканирование завершилось ошибкой")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=exchange_error_message(
@@ -115,7 +115,7 @@ async def status(user: User = Depends(current_user), db: AsyncSession = Depends(
         try:
             balance = (await exchange.get_balance()).get("USDT", 0.0)
         except Exception as exc:
-            logger.exception("Failed to fetch trading status exchange balance")
+            logger.exception("Не удалось получить баланс биржи для торгового статуса")
             exchange_connected = False
             exchange_error = exchange_error_message(
                 exc,

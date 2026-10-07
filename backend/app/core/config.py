@@ -51,8 +51,6 @@ class Settings(BaseSettings):
     futures_min_liquidation_buffer_percent: float = 8.0
     futures_require_native_stop: bool = True
     spot_secondary_enabled: bool = False
-    block_spot_short_entries: bool = True
-    allow_paper_short_on_spot: bool = False
     paper_trading: bool = True
     # Virtual starting capital used only while execution is in paper mode.
     # It is independent from exchange credentials and gives the dashboard a
@@ -173,7 +171,7 @@ class Settings(BaseSettings):
     pretrade_quality_min_profit_factor: float = 1.1
     pretrade_quality_min_win_rate: float = 42.0
     pretrade_quality_min_profitable_windows_percent: float = 50.0
-    pretrade_quality_min_trades: int = 3
+    pretrade_quality_min_trades: int = 20
     pretrade_quality_min_risk_multiplier: float = 0.35
     pretrade_quality_require_history: bool = True
     market_quality_min_quote_volume: float = 25_000_000.0
@@ -236,6 +234,21 @@ class Settings(BaseSettings):
     # Native stops are safe only for reduce-only derivatives positions.  Spot
     # keeps a local monitor so a stop cannot liquidate unrelated wallet funds.
     native_protective_stops_enabled: bool = True
+    # Venue/accounting invariants. Spot execution must never turn a directional
+    # SELL signal into a sale of unrelated wallet inventory.
+    block_spot_short_entries: bool = True
+    allow_paper_short_on_spot: bool = False
+    spot_max_gross_exposure_percent: float = 90.0
+    derivatives_max_gross_exposure_percent: float = 200.0
+    equity_snapshot_enabled: bool = True
+    equity_snapshot_interval_seconds: int = 60
+    derivatives_context_enabled: bool = True
+    derivatives_context_timeout_seconds: float = 8.0
+    derivatives_context_concurrency: int = 3
+    extreme_funding_rate_abs: float = 0.0008
+    counterfactual_tracking_enabled: bool = True
+    counterfactual_horizon_minutes: int = 240
+    regime_strategy_shadow_enabled: bool = True
     learning_progress_target_trades: int = 30
     learning_progress_target_observations: int = 100
     post_mortem_enabled: bool = True
@@ -246,7 +259,7 @@ class Settings(BaseSettings):
     bad_replay_max_weight: float = 3.0
     strategy_optimizer_apply_enabled: bool = True
     strategy_optimizer_min_profit_factor: float = 1.05
-    strategy_optimizer_min_trades: int = 3
+    strategy_optimizer_min_trades: int = 30
     strategy_optimizer_max_age_days: int = 14
     strategy_optimizer_worker_enabled: bool = True
     strategy_optimizer_loop_seconds: int = 21600
@@ -257,7 +270,7 @@ class Settings(BaseSettings):
     strategy_optimizer_require_validation_pass: bool = True
     strategy_optimizer_validation_percent: float = 30.0
     strategy_optimizer_validation_min_candles: int = 220
-    strategy_optimizer_min_validation_trades: int = 2
+    strategy_optimizer_min_validation_trades: int = 15
     strategy_optimizer_min_validation_profit_factor: float = 1.0
     strategy_optimizer_min_validation_win_rate: float = 35.0
     strategy_optimizer_min_validation_profit: float = 0.0
@@ -289,7 +302,7 @@ class Settings(BaseSettings):
     rl_min_excess_return_percent: float = 0.0
     rl_min_profitable_seed_ratio: float = 0.5
     rl_min_validation_profit_factor: float = 1.05
-    rl_min_validation_trades: int = 5
+    rl_min_validation_trades: int = 20
     rl_max_validation_drawdown_percent: float = 15.0
     rl_gate_min_confidence: float = 0.55
     rl_gate_max_age_hours: float = 6.0
@@ -301,7 +314,7 @@ class Settings(BaseSettings):
     shadow_trade_min_confidence: float = 0.55
     shadow_trade_stop_percent: float = 1.5
     shadow_trade_take_percent: float = 3.0
-    shadow_forward_min_trades: int = 5
+    shadow_forward_min_trades: int = 30
     shadow_forward_min_profit_factor: float = 1.1
     shadow_forward_min_win_rate: float = 40.0
     shadow_forward_min_pnl: float = 0.0

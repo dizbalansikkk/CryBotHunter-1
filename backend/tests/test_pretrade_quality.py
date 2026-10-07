@@ -20,7 +20,7 @@ def window(**overrides):
         "test_win_rate": 55.0,
         "test_profit_factor": 1.5,
         "test_max_drawdown": 2.0,
-        "test_trades_count": 4,
+        "test_trades_count": 20,
     }
     data.update(overrides)
     return WalkForwardWindow(**data)
@@ -76,7 +76,7 @@ def test_pretrade_quality_blocks_weak_walk_forward():
 def test_pretrade_quality_reduces_risk_for_borderline_walk_forward():
     gate = PreTradeQualityGate()
     borderline_report = report(
-        windows=[window(test_profit=2.0, test_win_rate=40.0, test_profit_factor=1.0, test_trades_count=4)],
+        windows=[window(test_profit=2.0, test_win_rate=40.0, test_profit_factor=1.0, test_trades_count=20)],
         total_profit=2.0,
         average_win_rate=40.0,
         average_profit_factor=1.0,
@@ -99,6 +99,17 @@ def test_pretrade_quality_allows_stable_walk_forward():
     assert decision.reason == "pre-trade quality passed"
     assert decision.profitable_windows_percent == 100.0
     assert decision.risk_multiplier == 1.0
+
+
+def test_pretrade_quality_blocks_profitable_but_insufficient_sample():
+    gate = PreTradeQualityGate()
+    decision = gate._decision(
+        report(windows=[window(test_trades_count=4)]),
+        candles_checked=500,
+        risk_settings=risk_settings(),
+    )
+    assert not decision.allowed
+    assert "too few historical trades" in decision.reason
 
 
 def test_paper_learning_probe_can_collect_unknown_setup_at_minimum_risk():

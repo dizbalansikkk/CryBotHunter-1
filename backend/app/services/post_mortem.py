@@ -31,6 +31,8 @@ LESSONS = {
     "LATE_ENTRY_EXHAUSTION": "Не догонять уже растянутый импульс без отката или повторного подтверждения ликвидности.",
     "EXECUTION_COST_DAMAGE": "Пропускать вход, если ожидаемые комиссии, спред и проскальзывание съедают существенную часть планового риска.",
     "VALID_STOP": "Стоп исполнен по плану: сохранять дисциплину риска, но продолжить проверку качества самого входа.",
+    "PROFITABLE_DISCIPLINED": "Прибыльная сделка прошла без выявленного нарушения; сохранять этот контекст как положительный пример.",
+    "BREAKEVEN_DISCIPLINED": "Сделка завершена около безубытка без выявленного нарушения; учитывать как сохранение капитала.",
     "UNCLASSIFIED_LOSS": "Недостаточно данных для точной причины; пример сохранён с высоким приоритетом для повторного анализа.",
 }
 
@@ -41,14 +43,14 @@ class PostMortemService:
         self.settings = get_settings()
         self.microstructure = MicrostructureService(exchange)
 
-    async def analyze_loss(
+    async def analyze_trade(
         self,
         db: AsyncSession,
         position: Position,
         exit_order: Order,
         reason: str,
     ) -> TradePostMortem | None:
-        if not self.settings.post_mortem_enabled or float(position.pnl or 0.0) >= 0 or not position.id:
+        if not self.settings.post_mortem_enabled or not position.id:
             return None
         existing = (
             await db.execute(select(TradePostMortem).where(TradePostMortem.position_id == position.id))
@@ -119,6 +121,16 @@ class PostMortemService:
         }
         position.entry_context = entry_context
         return record
+
+    async def analyze_loss(
+        self,
+        db: AsyncSession,
+        position: Position,
+        exit_order: Order,
+        reason: str,
+    ) -> TradePostMortem | None:
+        """Backward-compatible entry point; all outcomes are now analysed."""
+        return await self.analyze_trade(db, position, exit_order, reason)
 
     async def _market_path(self, position: Position) -> list[list[float]]:
         entered_at = self._aware(position.entered_at)
@@ -238,11 +250,17 @@ class PostMortemService:
             labels.append("LATE_ENTRY_EXHAUSTION")
         if float(execution.get("cost_to_planned_risk") or 0.0) >= 0.25:
             labels.append("EXECUTION_COST_DAMAGE")
-        strategy_followed = reason == "STOP_LOSS" and not (set(labels) & AVOIDABLE_LABELS)
-        if strategy_followed:
+        strategy_followed = not bool(set(labels) & AVOIDABLE_LABELS)
+        if reason == "STOP_LOSS" and strategy_followed:
             labels.append("VALID_STOP")
         if not labels:
-            labels.append("UNCLASSIFIED_LOSS")
+            pnl = float(position.pnl or 0.0)
+            if pnl > 0:
+                labels.append("PROFITABLE_DISCIPLINED")
+            elif abs(pnl) <= max(abs(float(position.initial_risk or 0.0)) * float(position.volume or 0.0) * 0.05, 1e-9):
+                labels.append("BREAKEVEN_DISCIPLINED")
+            else:
+                labels.append("UNCLASSIFIED_LOSS")
         return labels, strategy_followed
 
     def reward_components(
@@ -287,7 +305,7 @@ class BadExperienceReplay:
             (
                 await db.execute(
                     select(TradePostMortem)
-                    .where(TradePostMortem.symbol == symbol)
+                    .where(TradePostMortem.symbol == symbol, TradePostMortem.pnl < 0)
                     .order_by(TradePostMortem.priority.desc(), TradePostMortem.closed_at.desc())
                     .limit(200)
                 )

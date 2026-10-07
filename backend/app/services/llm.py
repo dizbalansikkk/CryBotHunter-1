@@ -66,5 +66,5 @@ class LlmAdvisorProvider:
             content = response.json()["choices"][0]["message"]["content"]
             return LlmAdvice.model_validate_json(content)
         except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError):
-            logger.exception("LLM advisor failed")
+            logger.exception("LLM-советник не смог подготовить рыночное заключение")
             return None

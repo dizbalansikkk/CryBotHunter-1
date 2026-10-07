@@ -49,7 +49,7 @@ async def dashboard(user: User = Depends(current_user), db: AsyncSession = Depen
         try:
             balance = (await exchange.get_balance()).get("USDT", 0)
         except Exception:
-            logger.exception("Failed to fetch dashboard exchange balance")
+            logger.exception("Не удалось получить баланс биржи для панели управления")
             balance = 0
         finally:
             await exchange.close()

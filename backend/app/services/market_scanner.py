@@ -49,7 +49,7 @@ class MarketScanner:
                 try:
                     return await self._scan_ccxt_symbol(symbol, tickers.get(symbol, {}))
                 except Exception as exc:
-                    logger.warning("Market scan skipped symbol=%s error=%s", symbol, type(exc).__name__)
+                    logger.warning("Сканер рынка пропустил пару=%s из-за ошибки=%s", symbol, type(exc).__name__)
                     return None
 
         results = await asyncio.gather(*(scan_symbol(symbol) for symbol in symbols))

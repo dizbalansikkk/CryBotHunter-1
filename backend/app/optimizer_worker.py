@@ -18,7 +18,7 @@ async def main() -> None:
     locks = RedisLockManager()
     heartbeat = HeartbeatReporter("optimizer-worker")
     logger.info(
-        "Optimizer worker started symbols=%s timeframes=%s loop=%ss",
+        "Воркер оптимизации запущен: пары=%s, таймфреймы=%s, интервал цикла=%s сек.",
         settings.candle_ingest_symbols,
         settings.candle_ingest_timeframes,
         settings.strategy_optimizer_loop_seconds,
@@ -27,7 +27,7 @@ async def main() -> None:
     while True:
         try:
             if not settings.strategy_optimizer_worker_enabled:
-                logger.warning("Optimizer worker disabled by STRATEGY_OPTIMIZER_WORKER_ENABLED=false")
+                logger.warning("Воркер оптимизации отключён настройкой STRATEGY_OPTIMIZER_WORKER_ENABLED=false")
                 await heartbeat.set_status("DISABLED", {"enabled": False})
                 await asyncio.sleep(settings.strategy_optimizer_loop_seconds)
                 continue
@@ -75,10 +75,10 @@ async def main() -> None:
                                     )
                                     refreshed[key] = len(results)
                                 except Exception as exc:
-                                    logger.exception("Optimizer failed for %s", key)
-                                    db.add(LogEntry(level="ERROR", message=f"Optimizer failed for {key}: {exc.__class__.__name__}"))
+                                    logger.exception("Ошибка оптимизации стратегии для %s", key)
+                                    db.add(LogEntry(level="ERROR", message=f"Оптимизация стратегии для {key} завершилась ошибкой: {exc.__class__.__name__}"))
                                     await db.commit()
-                        db.add(LogEntry(level="INFO", message=f"Optimizer worker refreshed={refreshed} skipped={skipped}"))
+                        db.add(LogEntry(level="INFO", message=f"Цикл оптимизации завершён: обновлено={refreshed}; пропущено без изменений={skipped}"))
                         await db.commit()
                         await heartbeat.set_status(
                             "OK",
@@ -90,7 +90,7 @@ async def main() -> None:
                             {"stage": "replica_wait", "reason": "lock_owned_by_another_replica"},
                         )
         except Exception as exc:
-            logger.exception("Optimizer worker loop failed")
+            logger.exception("Ошибка основного цикла воркера оптимизации")
             await heartbeat.set_status("ERROR", {"error": type(exc).__name__})
         await asyncio.sleep(settings.strategy_optimizer_loop_seconds)
 

@@ -268,6 +268,30 @@ class RiskManager:
             return True, f"{side.lower()} direction risk reduced to {multiplier:.2f}x", multiplier
         return True, "directional exposure accepted", 1.0
 
+    def liquidation_buffer_safe(
+        self,
+        *,
+        entry_price: float,
+        stop_price: float,
+        leverage: float,
+        minimum_buffer_percent: float,
+    ) -> tuple[bool, str]:
+        """Conservative pre-trade check; exchange liquidation data remains authoritative."""
+        if not all(self._is_positive_finite(value) for value in (entry_price, stop_price, leverage)):
+            return False, "invalid liquidation buffer inputs"
+        stop_distance = abs(float(entry_price) - float(stop_price)) / float(entry_price) * 100
+        # Maintenance margin tiers vary by venue and notional. Reserve 10% of
+        # the theoretical 1/leverage distance instead of pretending to know an
+        # exact liquidation price before the exchange acknowledges the order.
+        conservative_liquidation_distance = 100.0 / float(leverage) * 0.90
+        available_buffer = conservative_liquidation_distance - stop_distance
+        if available_buffer < max(float(minimum_buffer_percent), 0.0):
+            return (
+                False,
+                f"liquidation buffer {available_buffer:.2f}% below minimum {minimum_buffer_percent:.2f}%",
+            )
+        return True, f"liquidation buffer accepted: {available_buffer:.2f}%"
+
     def _is_positive_finite(self, value: float | None) -> bool:
         try:
             return value is not None and math.isfinite(float(value)) and float(value) > 0

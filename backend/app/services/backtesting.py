@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import math
+from statistics import mean, pstdev
 
 import pandas as pd
 
@@ -19,6 +21,8 @@ class BacktestReport:
     average_loss: float
     trades_count: int = 0
     total_profit: float = 0.0
+    sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0
 
 
 @dataclass
@@ -131,10 +135,23 @@ class BacktestingService:
                 continue
 
             average_volume = float(frame["volume"].rolling(20).mean().iloc[int(row.name)] or row["volume"])
+            quote_volume_24h = float(row["volume"]) * float(row["close"]) * 24
+            average_quote_volume_24h = average_volume * float(row["close"]) * 24
+            candidate_row = {
+                "price": float(row["close"]),
+                "volume_24h": quote_volume_24h,
+                "open_interest": 0.0,
+                "spread_bps": 0.0,
+                "atr": float(row["atr"]),
+                "ema50": float(row["ema50"]),
+                "ema200": float(row["ema200"]),
+                "price_change_percent": 0.0,
+            }
             coin = MarketCoin(
                 symbol=candles[0].symbol,
                 price=float(row["close"]),
-                volume_24h=float(row["volume"]),
+                volume_24h=quote_volume_24h,
+                volume_average_24h=average_quote_volume_24h,
                 price_change_percent=0,
                 atr=float(row["atr"]),
                 rsi=float(row["rsi"]),
@@ -144,9 +161,13 @@ class BacktestingService:
                 macd=float(row["macd"]),
                 funding_rate=0,
                 open_interest=1_000_000_000,
-                rating=85,
+                rating=self.scanner.rate_coin(candidate_row),
             )
-            signal = self.strategy.evaluate(coin, average_volume=average_volume)
+            regime = self.scanner.regime_detector.detect(coin)
+            coin = coin.model_copy(
+                update={"regime": regime.name, "regime_score": regime.score, "regime_reason": regime.reason}
+            )
+            signal = self.strategy.evaluate(coin, average_volume=average_quote_volume_24h)
             if signal.signal in {"BUY", "SELL"}:
                 entry = float(row["close"])
                 entry_side = "buy" if signal.signal == "BUY" else "sell"
@@ -165,6 +186,15 @@ class BacktestingService:
                     "take": take,
                     "volume": volume,
                 }
+        if position and not frame.empty:
+            last = frame.iloc[-1]
+            exit_side = "sell" if position["side"] == "LONG" else "buy"
+            exit_fill = self._apply_slippage(
+                float(last["close"]),
+                exit_side,
+                self._dynamic_slippage_bps(last, effective_slippage_bps),
+            )
+            profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
         return self.summarize(profits)
 
     def walk_forward(
@@ -288,13 +318,23 @@ class BacktestingService:
             equity += profit
             peak = max(peak, equity)
             max_drawdown = max(max_drawdown, peak - equity)
+        average = mean(profits) if profits else 0.0
+        deviation = pstdev(profits) if len(profits) > 1 else 0.0
+        downside = [min(value, 0.0) for value in profits]
+        downside_deviation = math.sqrt(sum(value * value for value in downside) / len(downside)) if downside else 0.0
+        sharpe = average / deviation * math.sqrt(len(profits)) if deviation > 0 else 0.0
+        sortino = average / downside_deviation * math.sqrt(len(profits)) if downside_deviation > 0 else 0.0
+        total = sum(profits)
+        calmar = total / max_drawdown if max_drawdown > 0 else 0.0
         return BacktestReport(
             win_rate=round(win_rate, 2),
             profit_factor=round(gross_profit / gross_loss, 2) if gross_loss else 0,
-            sharpe_ratio=0.0,
+            sharpe_ratio=round(sharpe, 4),
             max_drawdown=round(max_drawdown, 2),
             average_profit=round(gross_profit / len(wins), 2) if wins else 0,
             average_loss=round(gross_loss / len(losses), 2) if losses else 0,
             trades_count=len(profits),
-            total_profit=round(sum(profits), 2),
+            total_profit=round(total, 2),
+            sortino_ratio=round(sortino, 4),
+            calmar_ratio=round(calmar, 4),
         )

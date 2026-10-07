@@ -15,6 +15,7 @@ from app.services.advanced_agents import (
     PortfolioCorrelationAgent,
 )
 from app.services.agent_competition import AgentCompetitionService, CompetitionProfile
+from app.services.derivatives_context import DerivativesContextService
 from app.services.llm import LlmAdvisorProvider
 from app.services.market_scanner import MarketScanner
 from app.services.ml import MlSignalService
@@ -224,7 +225,7 @@ class VolatilityAgent:
 
     def decide(self, coin: MarketCoin) -> AgentDecisionOut:
         atr_percent = coin.atr / max(coin.price, 1) * 100
-        funding_risk = abs(coin.funding_rate) > 0.08
+        funding_risk = abs(coin.funding_rate) > float(get_settings().extreme_funding_rate_abs)
         too_hot = atr_percent > 8 or funding_risk
         action = "BLOCK" if too_hot else "ALLOW"
         confidence = 0.85 if too_hot else 0.75
@@ -357,6 +358,42 @@ class DataQualityAgent:
         )
 
 
+class VenueSafetyAgent:
+    """Prevents an entry signal from violating the configured venue semantics."""
+
+    name = "VenueSafetyAgent"
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+
+    def decide(self, coin: MarketCoin, signal: str) -> AgentDecisionOut:
+        market_type = str(self.settings.exchange_default_type or "spot").lower()
+        derivatives = market_type in {"future", "futures", "swap"}
+        blocked = (
+            signal == "SELL"
+            and not derivatives
+            and self.settings.block_spot_short_entries
+            and (not self.settings.paper_trading or not self.settings.allow_paper_short_on_spot)
+        )
+        return AgentDecisionOut(
+            agent_name=self.name,
+            symbol=coin.symbol,
+            action="BLOCK" if blocked else "ALLOW",
+            confidence=0.99,
+            rationale=(
+                "SHORT запрещён в Spot-контуре: бот не имеет права продавать несвязанное содержимое кошелька."
+                if blocked
+                else f"Направление {signal} совместимо с рынком {market_type}."
+            ),
+            context={
+                "gate_kind": "SAFETY",
+                "market_type": market_type,
+                "signal": signal,
+                "spot_short_blocked": blocked,
+            },
+        )
+
+
 class EntryTimingAgent:
     """Prevents chasing an extended move or entering without volume confirmation."""
 
@@ -456,6 +493,7 @@ class MicrostructureAgent:
 class AgentOrchestrator:
     def __init__(self) -> None:
         self.scanner = MarketScanner()
+        self.derivatives_context = DerivativesContextService(self.scanner.exchange)
         self.market_agent = MarketAnalystAgent()
         self.llm_agent = LlmAdvisorAgent()
         self.risk_agent = RiskSupervisorAgent()
@@ -478,7 +516,7 @@ class AgentOrchestrator:
         self.event_risk_agent = EventRiskAgent()
 
     async def analyze(self, db: AsyncSession, symbol: str) -> AgentAnalysisOut:
-        coins = await self.scanner.scan([symbol])
+        coins = await self.derivatives_context.enrich(db, await self.scanner.scan([symbol]))
         return await self.analyze_coin(db, coins[0])
 
     async def analyze_coin(
@@ -499,6 +537,7 @@ class AgentOrchestrator:
             self._competition_context(agent.decide(coin), profiles)
             for agent in [*self.committee_agents, *self.challenger_agents]
         ]
+        committee.append(VenueSafetyAgent().decide(coin, market.action))
         committee.append(MicrostructureAgent().decide(coin, market.action, microstructure))
         if self.settings.advanced_agents_enabled:
             committee.extend(

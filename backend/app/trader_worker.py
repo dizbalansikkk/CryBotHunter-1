@@ -16,6 +16,7 @@ from app.services.exchange import ExchangeClient, exchange_error_message
 from app.services.heartbeat import HeartbeatReporter
 from app.services.locks import RedisLockManager, TRADING_CYCLE_LOCK
 from app.services.reconciliation import OrderReconciliationService
+from app.services.release_audit import StrategyReleaseAudit
 from app.services.risk_manager import RiskSettings
 from app.services.schema_readiness import wait_for_required_tables
 from app.services.telegram_bot import TelegramNotifier
@@ -46,7 +47,14 @@ async def main() -> None:
     await heartbeat.start()
     schema_ready = await wait_for_required_tables(
         database_engine,
-        ("trade_post_mortems", "shadow_trades"),
+        (
+            "trade_post_mortems",
+            "shadow_trades",
+            "equity_snapshots",
+            "market_derivative_snapshots",
+            "signal_observations",
+            "strategy_releases",
+        ),
         heartbeat=heartbeat,
         shutdown=shutdown,
     )
@@ -56,6 +64,15 @@ async def main() -> None:
         await control.close()
         logger.info("Trader-worker остановлен во время ожидания миграции базы данных")
         return
+    async with AsyncSessionLocal() as db:
+        release = await StrategyReleaseAudit().record(db)
+        await db.commit()
+        logger.info(
+            "Trading release registered version=%s config=%s market=%s",
+            release.version,
+            release.config_hash[:12],
+            settings.primary_trading_market,
+        )
     if settings.telegram_trade_reports_enabled:
         await notifier.broadcast(
             format_worker_started(

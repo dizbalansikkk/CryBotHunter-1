@@ -38,7 +38,7 @@ def coin(**overrides):
         "ema50": 100,
         "ema200": 90,
         "macd": 10,
-        "funding_rate": 0.01,
+        "funding_rate": 0.0001,
         "open_interest": 1_500_000_000,
         "bid": 109.95,
         "ask": 110.05,
@@ -174,6 +174,10 @@ def test_regime_agent_blocks_bad_regime():
     decision = RegimeAgent().decide(coin(regime="HIGH_VOLATILITY", regime_score=25, regime_reason="too hot"))
     assert decision.action == "BLOCK"
     assert decision.confidence >= 0.9
+
+
+def test_volatility_agent_blocks_extreme_funding():
+    assert VolatilityAgent().decide(coin(funding_rate=0.01)).action == "BLOCK"
 
 
 def test_trade_committee_veto_blocks_thin_liquidity():

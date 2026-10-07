@@ -16,6 +16,8 @@ from app.services.binance_events import BnbPriorityDecision, BinanceEventAssessm
 from app.services.context_manager import ContextManager
 from app.services.control import TradingControlService
 from app.services.cooldown import LossCooldownGuard
+from app.services.counterfactual import CounterfactualService
+from app.services.derivatives_context import DerivativesContextService
 from app.services.exchange import ExchangeClient
 from app.services.execution import ExecutionService
 from app.services.learning import LearningService
@@ -27,9 +29,11 @@ from app.services.performance_guard import PerformanceGuardReport, PerformanceGu
 from app.services.pnl import PnlMetricsService
 from app.services.pretrade_quality import PreTradeQualityGate
 from app.services.post_mortem import PostMortemService
+from app.services.portfolio_accounting import PortfolioAccountingService
 from app.services.risk_manager import DrawdownAssessment, RiskManager, RiskSettings
 from app.services.rl_gate import RlDecisionGate
 from app.services.strategy import StrategyCore
+from app.services.strategy_router import RegimeStrategyRouter
 from app.services.telegram_bot import TelegramNotifier
 from app.services.telegram_reports import (
     format_partial_take_profit,
@@ -52,21 +56,25 @@ class TradingEngine:
     ) -> None:
         self.exchange = exchange or ExchangeClient()
         self.scanner = MarketScanner(self.exchange)
+        self.derivatives_context = DerivativesContextService(self.exchange)
         self.market_quality = MarketQualityGate()
         self.microstructure = MicrostructureService(self.exchange)
         self.entry_gatekeeper = EntryGatekeeper()
         self.strategy = StrategyCore()
+        self.strategy_router = RegimeStrategyRouter()
         self.optimizer = StrategyOptimizerService()
         self.risk = RiskManager()
         self.rl_gate = RlDecisionGate()
         self.execution = ExecutionService(self.exchange)
         self.guard = PerformanceGuardService()
         self.cooldown_guard = LossCooldownGuard()
+        self.counterfactual = CounterfactualService()
         self.pnl_metrics = PnlMetricsService()
         self.quality_gate = PreTradeQualityGate()
         self.agents = AgentOrchestrator()
         self.learning = LearningService()
         self.post_mortem = PostMortemService(self.exchange)
+        self.portfolio_accounting = PortfolioAccountingService(self.exchange)
         self.telegram = TelegramNotifier()
         self.context = ContextManager()
         self.control = control or TradingControlService()
@@ -113,7 +121,27 @@ class TradingEngine:
         if drawdown.emergency:
             await db.commit()
             return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
-        coins = await self.scanner.scan()
+        coins = await self.derivatives_context.enrich(db, await self.scanner.scan())
+        if self.settings.regime_strategy_shadow_enabled:
+            routed_coins: list[MarketCoin] = []
+            for coin in coins:
+                routed = self.strategy_router.evaluate(coin)
+                context = dict(coin.market_context or {})
+                context["strategy_router"] = {
+                    "live_family": "TREND_PULLBACK",
+                    "recommended_regime_family": routed.regime_family,
+                    "shadow": [
+                        {
+                            "signal": candidate.signal,
+                            "score": candidate.score,
+                            "reasons": candidate.reasons,
+                        }
+                        for candidate in routed.shadow
+                    ],
+                }
+                routed_coins.append(coin.model_copy(update={"market_context": context}))
+            coins = routed_coins
+        await self.counterfactual.resolve_due(db, coins)
         if self.settings.binance_event_priority_enabled:
             bnb_event = await self.event_priority.assess()
         else:
@@ -525,6 +553,7 @@ class TradingEngine:
                     TradingDecision(symbol=coin.symbol, signal=signal.signal, score=signal.score, action="SKIPPED", reason=reason)
                 )
 
+        self.counterfactual.record_cycle(db, cycle_id=cycle_id, decisions=decisions, coins=coins)
         await db.commit()
         opened = sum(1 for item in decisions if item.action == "OPENED")
         return TradingRunOut(scanned=len(coins), opened=opened, skipped=len(decisions) - opened, decisions=decisions)
@@ -609,7 +638,7 @@ class TradingEngine:
             position.pnl = await self._position_total_pnl(db, position, price)
             await self._capture_position_microstructure(position)
 
-        drawdown = await self._enforce_drawdown_limit(db, balance)
+        drawdown = await self._enforce_drawdown_limit(db, balance, force_snapshot=True)
         emergency_close = drawdown.emergency
         pending_order_symbols = await self._pending_order_symbols(db)
         updates: list[PositionUpdateOut] = []
@@ -1021,6 +1050,15 @@ class TradingEngine:
     ) -> Position | None:
         side = "LONG" if signal == "BUY" else "SHORT"
         stop, take, initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
+        if self.exchange.is_derivatives_market():
+            buffer_ok, _buffer_reason = self.risk.liquidation_buffer_safe(
+                entry_price=coin.price,
+                stop_price=stop,
+                leverage=min(self.settings.futures_leverage, self.settings.futures_max_leverage),
+                minimum_buffer_percent=self.settings.futures_min_liquidation_buffer_percent,
+            )
+            if not buffer_ok:
+                return None
         volume = self.risk.calculate_position_size(
             balance,
             settings.risk_percent,
@@ -1072,6 +1110,7 @@ class TradingEngine:
             "volume": round(float(volume), 8),
             "average_price": round(float(entry_price), 8),
             "status": entry_order.status,
+            "venue_setup": (entry_order.raw or {}).get("venue_setup", {}),
         }
         if paper_exploration:
             bullish_votes, bearish_votes = self._paper_exploration_votes(coin)
@@ -1154,13 +1193,29 @@ class TradingEngine:
         db.add(position)
         await db.flush()
         db.add(Trade(position_id=position.id, symbol=coin.symbol, side=side, entry_price=entry_price, exit_price=None, profit=-entry_order.fee))
-        await self._replace_protective_stop(
+        protected = await self._replace_protective_stop(
             db,
             position,
             stop_price=stop,
             stage="INITIAL",
             cycle_id=None,
         )
+        if (
+            self.exchange.is_derivatives_market()
+            and not self.settings.paper_trading
+            and self.settings.futures_require_native_stop
+            and not protected
+        ):
+            await self._close_position(
+                db,
+                position,
+                entry_price,
+                "PROTECTION_FAILED",
+                cycle_id=None,
+            )
+            if position.status == "OPEN":
+                await self.control.panic(f"unprotected_futures_position:{position.symbol}:{position.id}")
+            return None
         return position
 
     def _opportunity_rank(
@@ -1168,17 +1223,32 @@ class TradingEngine:
         coin: MarketCoin,
         signal: StrategySignal,
         bnb_priority: BnbPriorityDecision | None = None,
-    ) -> tuple[int, int, int, int, int]:
+    ) -> tuple[int, float, int, int, int, int]:
         market_score = self.event_priority.market_score(coin)[0]
         event_score = bnb_priority.assessment.event_score if bnb_priority else 0
         final_score = bnb_priority.final_score if bnb_priority else int(signal.score) + market_score
         return (
             1 if signal.signal in {"BUY", "SELL"} else 0,
+            self._expected_net_r(coin, signal),
             final_score,
             int(signal.score),
             int(coin.regime_score),
             event_score,
         )
+
+    def _expected_net_r(self, coin: MarketCoin, signal: StrategySignal) -> float:
+        """Comparable after-cost edge used only for ranking, never as an entry bypass."""
+        if signal.signal not in {"BUY", "SELL"} or coin.price <= 0:
+            return -10.0
+        probability = max(0.35, min(0.80, 0.35 + 0.45 * float(signal.score) / 100.0))
+        reward_r = max(float(getattr(self.settings, "pretrade_expected_reward_r", 2.0)), 1.0)
+        spread_bps = max(float(coin.spread_bps or 0.0), 0.0)
+        fee_bps = max(float(self.settings.paper_fee_rate), 0.0) * 20_000
+        impact_bps = max(float(self.settings.execution_market_impact_bps), 0.0) * 2
+        funding_bps = abs(float(coin.funding_rate or 0.0)) * 10_000 if self.exchange.is_derivatives_market() else 0.0
+        stop_distance_bps = max(float(coin.atr) * 1.5 / float(coin.price) * 10_000, 1.0)
+        cost_r = (spread_bps + fee_bps + impact_bps + funding_bps) / stop_distance_bps
+        return round(probability * reward_r - (1.0 - probability) - cost_r, 6)
 
     async def _capture_position_microstructure(self, position: Position) -> None:
         if not self.settings.post_mortem_enabled:
@@ -1316,12 +1386,17 @@ class TradingEngine:
             max_position_percent=settings.max_position_size_percent,
         )
         candidate_notional = self.risk.position_notional(coin.price, volume)
+        venue_limit = (
+            self.settings.derivatives_max_gross_exposure_percent
+            if self.exchange.is_derivatives_market()
+            else self.settings.spot_max_gross_exposure_percent
+        )
         accepted, reason = self.risk.can_add_exposure(
             balance=balance,
             current_gross_exposure=exposure["gross"],
             current_symbol_exposure=exposure["symbols"].get(coin.symbol, 0.0),
             candidate_notional=candidate_notional,
-            max_gross_exposure_percent=self.settings.max_gross_exposure_percent,
+            max_gross_exposure_percent=min(self.settings.max_gross_exposure_percent, venue_limit),
             max_symbol_exposure_percent=self.settings.max_symbol_exposure_percent,
         )
         return accepted, reason, candidate_notional
@@ -1989,11 +2064,11 @@ class TradingEngine:
                 cycle_id=cycle_id,
             )
         try:
-            post_mortem = await self.post_mortem.analyze_loss(db, position, exit_order, reason)
+            post_mortem = await self.post_mortem.analyze_trade(db, position, exit_order, reason)
             if post_mortem:
                 self._log_trading_event(
                     db,
-                    "WARNING",
+                    "WARNING" if float(position.pnl or 0.0) < 0 else "INFO",
                     "POST_MORTEM_CREATED",
                     (
                         f"Post-mortem {position.symbol} #{position.id}: "
@@ -2685,8 +2760,66 @@ class TradingEngine:
     async def _daily_pnl(self, db: AsyncSession) -> float:
         return (await self.pnl_metrics.summary(db)).pnl_day
 
-    async def _enforce_drawdown_limit(self, db: AsyncSession, balance: float) -> DrawdownAssessment:
+    async def _enforce_drawdown_limit(
+        self,
+        db: AsyncSession,
+        balance: float,
+        *,
+        force_snapshot: bool = False,
+    ) -> DrawdownAssessment:
         threshold = max(float(self.settings.max_drawdown_percent), 0.01)
+        try:
+            snapshot = await self.portfolio_accounting.capture(db, force=force_snapshot)
+        except Exception as exc:
+            snapshot = None
+            self._log_trading_event(
+                db,
+                "ERROR",
+                "EQUITY_SNAPSHOT_FAILED",
+                f"Portfolio equity snapshot failed: {type(exc).__name__}",
+                gate="PORTFOLIO_ACCOUNTING",
+                error_type=type(exc).__name__,
+            )
+        if snapshot is not None:
+            assessment = self.portfolio_accounting.assessment(snapshot, threshold)
+        else:
+            assessment = await self._legacy_drawdown_assessment(db, balance, threshold)
+
+        if not assessment.emergency:
+            return assessment
+
+        reason = f"risk_drawdown:{assessment.drawdown_percent:.2f}%>={assessment.threshold_percent:.2f}%"
+        paused, previous_reason = await self.control.is_paused()
+        first_activation = not paused or not (previous_reason or "").startswith("risk_drawdown:")
+        await self.control.panic(reason)
+        if first_activation:
+            message = (
+                "CRITICAL: portfolio drawdown limit reached\n"
+                f"Drawdown: {assessment.drawdown_percent:.2f}%\n"
+                f"Limit: {assessment.threshold_percent:.2f}%\n"
+                f"Equity: {assessment.current_equity:.2f}\n"
+                "Mode: ONLY CLOSE. New entries are blocked."
+            )
+            self._log_trading_event(
+                db,
+                "CRITICAL",
+                "DRAWDOWN_EMERGENCY",
+                message.replace("\n", " | "),
+                gate="DRAWDOWN_LIMIT",
+                drawdown_percent=round(float(assessment.drawdown_percent), 4),
+                threshold_percent=round(float(assessment.threshold_percent), 4),
+                current_equity=round(float(assessment.current_equity), 4),
+                peak_equity=round(float(assessment.peak_equity), 4),
+            )
+            await self.telegram.broadcast(message)
+        return assessment
+
+    async def _legacy_drawdown_assessment(
+        self,
+        db: AsyncSession,
+        balance: float,
+        threshold: float,
+    ) -> DrawdownAssessment:
         closed_pnls = list(
             (
                 await db.execute(
@@ -2720,33 +2853,6 @@ class TradingEngine:
                 emergency=True,
             )
 
-        if not assessment.emergency:
-            return assessment
-
-        reason = f"risk_drawdown:{assessment.drawdown_percent:.2f}%>={assessment.threshold_percent:.2f}%"
-        paused, previous_reason = await self.control.is_paused()
-        first_activation = not paused or not (previous_reason or "").startswith("risk_drawdown:")
-        await self.control.panic(reason)
-        if first_activation:
-            message = (
-                "CRITICAL: portfolio drawdown limit reached\n"
-                f"Drawdown: {assessment.drawdown_percent:.2f}%\n"
-                f"Limit: {assessment.threshold_percent:.2f}%\n"
-                f"Equity: {assessment.current_equity:.2f}\n"
-                "Mode: ONLY CLOSE. New entries are blocked."
-            )
-            self._log_trading_event(
-                db,
-                "CRITICAL",
-                "DRAWDOWN_EMERGENCY",
-                message.replace("\n", " | "),
-                gate="DRAWDOWN_LIMIT",
-                drawdown_percent=round(float(assessment.drawdown_percent), 4),
-                threshold_percent=round(float(assessment.threshold_percent), 4),
-                current_equity=round(float(assessment.current_equity), 4),
-                peak_equity=round(float(assessment.peak_equity), 4),
-            )
-            await self.telegram.broadcast(message)
         return assessment
 
     def _settings_with_balance(self, settings: RiskSettings, balance: float) -> RiskSettings:

@@ -175,6 +175,8 @@ class BacktestOut(BaseModel):
     average_loss: float
     trades_count: int = 0
     total_profit: float = 0
+    sortino_ratio: float = 0
+    calmar_ratio: float = 0
 
 
 class WalkForwardWindowOut(BaseModel):

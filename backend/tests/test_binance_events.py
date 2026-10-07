@@ -149,7 +149,8 @@ def test_event_bonus_changes_rank_but_never_strategy_gate_or_direction():
     )
 
     assert priority.final_score > weak.score
-    assert engine._opportunity_rank(bnb, weak, priority)[1] == priority.final_score
+    assert engine._opportunity_rank(bnb, weak, priority)[1] == engine._expected_net_r(bnb, weak)
+    assert engine._opportunity_rank(bnb, weak, priority)[2] == priority.final_score
     assert accepted is False
     assert reason == "signal score below minimum rating"
     assert weak.signal == "BUY"
