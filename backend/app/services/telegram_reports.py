@@ -424,7 +424,9 @@ def format_daily_report(snapshot: DailyReportSnapshot) -> str:
         f"└ Ошибок доставки: <code>{snapshot.failed_notifications}</code>\n\n"
         f"<i>Отчёт сформирован {snapshot.generated_at:%d.%m.%Y %H:%M} UTC. "
         "PnL каждого среза — реализованный результат закрытых в нём позиций; "
-        "общий PnL за день также включает текущий плавающий результат.</i>"
+        + ("общий PnL за день также включает текущий плавающий результат.</i>"
+           if snapshot.day_includes_current_open_pnl else
+           "PnL завершённого дня включает только закрытия этого дня. Открытые позиции и портфельные итоги показаны на момент формирования отчёта.</i>")
     )
 
 

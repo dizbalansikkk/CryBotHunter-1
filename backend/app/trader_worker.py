@@ -19,6 +19,7 @@ from app.services.reconciliation import OrderReconciliationService
 from app.services.release_audit import StrategyReleaseAudit
 from app.services.risk_manager import RiskSettings
 from app.services.schema_readiness import wait_for_required_tables
+from app.services.period_snapshots import PeriodSnapshotService
 from app.services.telegram_bot import TelegramNotifier
 from app.services.telegram_cards import safe_render_cycle_card
 from app.services.telegram_reports import format_cycle_report, format_worker_error, format_worker_started
@@ -54,6 +55,7 @@ async def main() -> None:
             "market_derivative_snapshots",
             "signal_observations",
             "strategy_releases",
+            "trading_period_snapshots",
         ),
         heartbeat=heartbeat,
         shutdown=shutdown,
@@ -196,6 +198,14 @@ async def main() -> None:
         finally:
             if exchange is not None:
                 await exchange.close()
+        # Independent of entry decisions, pauses and exchange availability.
+        # The unique database key also protects overlapping worker replicas.
+        try:
+            async with AsyncSessionLocal() as report_db:
+                await PeriodSnapshotService().capture_due(report_db)
+                await report_db.commit()
+        except Exception:
+            logger.exception("Не удалось сохранить плановый срез торговли; повтор в следующем цикле")
         if await shutdown.wait(delay):
             break
     await heartbeat.stop()

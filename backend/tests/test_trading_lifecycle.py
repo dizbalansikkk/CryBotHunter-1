@@ -9,6 +9,20 @@ from app.services.risk_manager import RiskSettings
 from app.services.trading_engine import TradingEngine
 
 
+@pytest.mark.asyncio
+async def test_empty_position_monitor_commits_equity_snapshot():
+    from unittest.mock import AsyncMock
+    engine = TradingEngine()
+    engine.exchange.get_balance = AsyncMock(return_value={"USDT": 638})
+    engine._enforce_drawdown_limit = AsyncMock(return_value=SimpleNamespace(emergency=False))
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))),
+        commit=AsyncMock(),
+    )
+    await engine.manage_open_positions(db)
+    db.commit.assert_awaited_once()
+
+
 def analysis(action: str, approved: bool = True, consensus_score: float = 0.8) -> AgentAnalysisOut:
     decision = AgentDecisionOut(
         agent_name="TradeCommittee",

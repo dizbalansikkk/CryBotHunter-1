@@ -41,6 +41,26 @@ class LowBalanceExchange:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("paper", [True, False])
+async def test_dust_exit_is_simulated_exactly_but_live_minimum_is_preserved(monkeypatch, paper):
+    class MinimumExchange(LowBalanceExchange):
+        async def prepare_order(self, symbol, amount, reference_price):
+            raise RuntimeError("below exchange minimum")
+
+    service = ExecutionService(MinimumExchange())
+    monkeypatch.setattr(service.settings, "paper_trading", paper)
+    order = await service.execute_market(Db(), "ETH/USDT", "sell", 0.0018, 2500, "EXIT_STOP_LOSS")
+    if paper:
+        assert order.status == "FILLED"
+        assert order.filled_amount == 0.0018
+        assert order.fee > 0
+        assert order.raw["paper_exit_exact_inventory"] is True
+    else:
+        assert order.status == "FAILED"
+        assert "below exchange minimum" in order.raw["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paper", [True, False])
 @pytest.mark.parametrize("side", ["buy", "sell"])
 async def test_disabled_secondary_spot_blocks_entries(monkeypatch, paper, side):
     service = ExecutionService(LowBalanceExchange())

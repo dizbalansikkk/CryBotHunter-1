@@ -89,6 +89,16 @@ class BacktestingService:
         # Keep the original candle number so a caller can provide historical
         # candles for indicator warm-up without allowing trades in that period.
         frame["source_index"] = frame.index
+        # Recreate the scanner's trailing daily turnover and prior seven-day
+        # baseline, rather than multiplying a single candle by 24. The latter
+        # distorts both liquidity ratings and the entry volume gate.
+        timestamps = pd.to_datetime([item.timestamp for item in candles], utc=True)
+        deltas = pd.Series(timestamps).diff().dt.total_seconds().dropna()
+        seconds = float(deltas[deltas > 0].median()) if (deltas > 0).any() else 3600.0
+        bars_per_day = max(1, int(round(86400 / seconds)))
+        frame["quote_volume_24h"] = (frame["volume"] * frame["close"]).rolling(bars_per_day, min_periods=bars_per_day).sum()
+        frame["average_quote_volume_24h"] = frame["quote_volume_24h"].shift(1).rolling(7 * bars_per_day, min_periods=1).mean()
+        frame["price_change_24h"] = frame["close"].pct_change(bars_per_day) * 100
         frame = self.scanner.calculate_indicators(frame).dropna().reset_index(drop=True)
         frame["volume_average"] = frame["volume"].rolling(20, min_periods=1).mean()
         profits: list[float] = []
@@ -134,9 +144,8 @@ class BacktestingService:
             if int(row["source_index"]) < max(int(trade_start_index), 0):
                 continue
 
-            average_volume = float(frame["volume"].rolling(20).mean().iloc[int(row.name)] or row["volume"])
-            quote_volume_24h = float(row["volume"]) * float(row["close"]) * 24
-            average_quote_volume_24h = average_volume * float(row["close"]) * 24
+            quote_volume_24h = float(row["quote_volume_24h"])
+            average_quote_volume_24h = float(row["average_quote_volume_24h"])
             candidate_row = {
                 "price": float(row["close"]),
                 "volume_24h": quote_volume_24h,
@@ -145,14 +154,14 @@ class BacktestingService:
                 "atr": float(row["atr"]),
                 "ema50": float(row["ema50"]),
                 "ema200": float(row["ema200"]),
-                "price_change_percent": 0.0,
+                "price_change_percent": float(row["price_change_24h"]),
             }
             coin = MarketCoin(
                 symbol=candles[0].symbol,
                 price=float(row["close"]),
                 volume_24h=quote_volume_24h,
                 volume_average_24h=average_quote_volume_24h,
-                price_change_percent=0,
+                price_change_percent=float(row["price_change_24h"]),
                 atr=float(row["atr"]),
                 rsi=float(row["rsi"]),
                 ema20=float(row["ema20"]),
@@ -160,7 +169,7 @@ class BacktestingService:
                 ema200=float(row["ema200"]),
                 macd=float(row["macd"]),
                 funding_rate=0,
-                open_interest=1_000_000_000,
+                open_interest=0.0,
                 rating=self.scanner.rate_coin(candidate_row),
             )
             regime = self.scanner.regime_detector.detect(coin)

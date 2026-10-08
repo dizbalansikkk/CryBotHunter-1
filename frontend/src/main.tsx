@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { ActionMessage, AgentActivity, AgentAnalysis, AgentDecision, api, BacktestReport, Dashboard, HistoryBatchIngest, HistoryIngest, HistoryReadiness, LearningInsights, LearningProgress, LearningRule, LearningSummary, LogEntry, MarketCoin, Order, PerformanceGuard, Position, RlModel, ShadowTrade, StrategyOptimization, SystemStatus, TradeAnalytics, TradeChart, TradePostMortem, TradingAudit, TradingAuditDay, TradingAuditSymbol, TradingRun, TradingTick, UserSettings, WalkForwardReport } from "./api/client";
 import "./styles.css";
+import { ActivityAuditPanel } from "./ActivityAuditPanel";
 
 type View = "dashboard" | "audit" | "market" | "agents" | "logs" | "settings";
 
@@ -102,7 +103,7 @@ function App() {
           <NavButton active={view === "dashboard"} onClick={() => setView("dashboard")} icon={<LayoutDashboard size={18} />} label="Панель" description="Сводка и торговля" />
           <NavButton active={view === "market"} onClick={() => setView("market")} icon={<LineChart size={18} />} label="Рынок" description="Монеты и сигналы" />
           <NavButton active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={18} />} label="AI-агенты" description="Комитет решений" />
-          <NavButton active={view === "audit"} onClick={() => setView("audit")} icon={<BarChart3 size={18} />} label="Аудит 30 дней" description="Факты и результат" />
+          <NavButton active={view === "audit"} onClick={() => setView("audit")} icon={<BarChart3 size={18} />} label="Статистика и аудит" description="Дни, срезы, результат" />
           <NavButton active={view === "logs"} onClick={() => setView("logs")} icon={<ScrollText size={18} />} label="Журнал" description="События системы" />
           <NavButton active={view === "settings"} onClick={() => setView("settings")} icon={<Settings size={18} />} label="Настройки" description="Риск и интеграции" />
         </nav>
@@ -627,7 +628,8 @@ function TradingAuditView() {
 
   return (
     <section className="space-y-5">
-      <Header title="Аудит торговли — 30 полных дней" subtitle="Только сохранённые торговые факты. Отсутствующие данные обозначены явно и не заменяются предположениями.">
+      <ActivityAuditPanel />
+      <Header title="Итоги закрытых сделок — 30 полных дней" subtitle="Этот раздел заканчивается вчера. Сегодняшние данные и срезы доступны выше.">
         <button className="btn" onClick={() => void load()} disabled={loading}><RefreshCw size={16} /> {loading ? "Обновляется" : "Обновить отчёт"}</button>
       </Header>
       {error && <Alert tone="danger" text={error} />}
@@ -643,7 +645,7 @@ function TradingAuditView() {
           <Metric label="Win Rate" value={`${fmt(total?.win_rate)}%`} />
           <Metric label="Gross Profit, USDT" value={`$${fmt(total?.gross_profit)}`} tone="good" />
           <Metric label="Gross Loss, USDT" value={`$${fmt(total?.gross_loss)}`} tone="bad" />
-          <Metric label="Profit Factor" value={formatProfitFactor(total?.profit_factor)} tone={(total?.profit_factor ?? 0) >= 1 ? "good" : "bad"} />
+          <Metric label="Profit Factor" value={formatProfitFactor(total?.profit_factor, total?.gross_profit)} tone={(total?.profit_factor ?? 0) >= 1 ? "good" : "bad"} />
         </div>
         <AuditFacts title="Качество и границы расчёта" data={data.data_quality} />
         <AuditDailyTable rows={data.daily_results} />
@@ -699,7 +701,7 @@ function AuditDailyTable({ rows }: { rows: TradingAuditDay[] }) {
           {rows.map((row) => <tr key={row.date}>
             <td className="font-semibold">{row.date}</td><td>{row.trades}</td><td>{row.profitable}</td><td>{row.losing}</td><td>{fmt(row.win_rate)}%</td>
             <td className="text-accent">${fmt(row.gross_profit)}</td><td className="text-danger">${fmt(row.gross_loss)}</td>
-            <td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_drawdown)}</td><td>{formatProfitFactor(row.profit_factor)}</td>
+            <td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_drawdown)}</td><td>{formatProfitFactor(row.profit_factor, row.gross_profit)}</td>
           </tr>)}
           {!rows.length && <EmptyRow cols={11} text="Дневных записей нет" />}
         </tbody>
@@ -729,7 +731,7 @@ function AuditSymbolTable({ rows }: { rows: TradingAuditSymbol[] }) {
   return <div className="table-wrap">
     <div className="table-title">Результат по каждой торговой паре — не сгруппировано по категориям</div>
     <table><thead><tr><th>Монета</th><th>Сделок</th><th>Win Rate</th><th>Gross Profit</th><th>Gross Loss</th><th>Net PnL</th><th>Avg PnL</th><th>Max Loss</th><th>Max Win</th><th>Profit Factor</th></tr></thead>
-      <tbody>{rows.map((row) => <tr key={row.symbol}><td className="font-semibold">{row.symbol}</td><td>{row.trades}</td><td>{fmt(row.win_rate)}%</td><td className="text-accent">${fmt(row.gross_profit)}</td><td className="text-danger">${fmt(row.gross_loss)}</td><td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_loss ?? undefined)}</td><td>${fmt(row.max_win ?? undefined)}</td><td>{formatProfitFactor(row.profit_factor)}</td></tr>)}
+      <tbody>{rows.map((row) => <tr key={row.symbol}><td className="font-semibold">{row.symbol}</td><td>{row.trades}</td><td>{fmt(row.win_rate)}%</td><td className="text-accent">${fmt(row.gross_profit)}</td><td className="text-danger">${fmt(row.gross_loss)}</td><td className={row.net_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(row.net_pnl)}</td><td>${fmt(row.average_pnl)}</td><td>${fmt(row.max_loss ?? undefined)}</td><td>${fmt(row.max_win ?? undefined)}</td><td>{formatProfitFactor(row.profit_factor, row.gross_profit)}</td></tr>)}
       {!rows.length && <EmptyRow cols={10} text="Закрытых сделок за период нет" />}</tbody>
     </table>
   </div>;
@@ -943,7 +945,7 @@ function TradeAnalyticsPanel({ analytics }: { analytics: TradeAnalytics | null }
           <Metric label="Открытый PnL" value={`$${fmt(analytics?.open_pnl)}`} tone={(analytics?.open_pnl ?? 0) >= 0 ? "good" : "bad"} />
           <Metric label="Итоговый PnL" value={`$${fmt(analytics?.net_pnl)}`} tone={(analytics?.net_pnl ?? 0) >= 0 ? "good" : "bad"} />
           <Metric label="Победы / убытки / 0" value={`${analytics?.wins ?? 0} / ${analytics?.losses ?? 0} / ${analytics?.breakeven ?? 0}`} />
-          <Metric label="Profit Factor" value={formatProfitFactor(analytics?.profit_factor)} tone={(analytics?.profit_factor ?? 0) >= 1 ? "good" : "bad"} />
+          <Metric label="Profit Factor" value={formatProfitFactor(analytics?.profit_factor, analytics?.gross_profit)} tone={(analytics?.profit_factor ?? 0) >= 1 ? "good" : "bad"} />
           <Metric label="Ожидание на сделку" value={`$${fmt(analytics?.expectancy)}`} tone={(analytics?.expectancy ?? 0) >= 0 ? "good" : "bad"} />
           <Metric label="Средняя прибыль" value={`$${fmt(analytics?.average_win)}`} tone="good" />
           <Metric label="Средний убыток" value={`$${fmt(analytics?.average_loss)}`} tone="bad" />
@@ -964,7 +966,7 @@ function TradeAnalyticsPanel({ analytics }: { analytics: TradeAnalytics | null }
                 <td>{fmt(item.win_rate)}%</td>
                 <td className={item.total_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(item.total_pnl)}</td>
                 <td className={item.average_pnl >= 0 ? "text-accent" : "text-danger"}>${fmt(item.average_pnl)}</td>
-                <td>{formatProfitFactor(item.profit_factor)}</td>
+                <td>{formatProfitFactor(item.profit_factor, item.wins)}</td>
                 <td className={item.expectancy >= 0 ? "text-accent" : "text-danger"}>${fmt(item.expectancy)}</td>
               </tr>
             ))}
@@ -2419,9 +2421,9 @@ function readError(err: unknown) {
   return "Запрос не выполнен";
 }
 
-function formatProfitFactor(value: number | null | undefined) {
+function formatProfitFactor(value: number | null | undefined, grossProfit?: number) {
   if (value == null) {
-    return "∞";
+    return (grossProfit ?? 0) > 0 ? "∞" : "—";
   }
   return fmt(value);
 }

@@ -15,6 +15,21 @@ strategy and accounting; the setting alone does not establish profitability.
 
 ## Stack
 
+The **Статистика и аудит** page includes a calendar-day activity report at
+`GET /api/v1/audit/activity?day=YYYY-MM-DD` (authenticated). It uses
+Europe/Simferopol boundaries and the 00–07, 07–14 and 14–24 slices. Closed PnL,
+entry skips, failed orders and recorded equity snapshots are separate measures.
+Missing historical snapshots are returned as missing, never reconstructed from
+today's unrealized PnL. The existing 30-day audit covers completed days only.
+Three durable period reports are saved daily after 07:00, 14:00 and 00:00 local
+time by the trader worker, independently of entry signals and pauses. A unique
+database key prevents duplicates across restarts. Missed reports are assembled
+from the persisted journal and marked `JOURNAL_BACKFILL`; this does not recreate
+missing equity samples. The first launch covers yesterday and elapsed periods
+today; later restarts catch up to 30 days of retained journal history.
+Paper exits preserve the exact remaining simulated inventory even when it is
+below today's venue minimum; live orders retain exchange minimum checks.
+
 - Backend: Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL, Redis, CCXT-ready services, Pandas, NumPy, APScheduler
 - ML: XGBoost, LightGBM, Scikit-Learn, and an isolated Stable Baselines3 PPO training worker
 - Frontend: React, TypeScript, TailwindCSS, Vite, Axios

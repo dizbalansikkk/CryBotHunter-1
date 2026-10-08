@@ -571,8 +571,9 @@ class TradingEngine:
         )
         if not positions:
             drawdown = await self._enforce_drawdown_limit(db, balance)
-            if drawdown.emergency:
-                await db.commit()
+            # Persist periodic equity even while entries are paused and there
+            # are no positions; otherwise closing the worker session loses it.
+            await db.commit()
             return TradingTickOut(checked=0, closed=0, updated=[])
 
         position_symbols = list(dict.fromkeys(position.symbol for position in positions))

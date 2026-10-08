@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -355,6 +355,20 @@ class StrategyRelease(Base):
     config_hash: Mapped[str] = mapped_column(String(64))
     parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     deployed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
+
+
+class TradingPeriodSnapshot(Base):
+    __tablename__ = "trading_period_snapshots"
+    __table_args__ = (UniqueConstraint("report_date", "start_hour", "mode", name="uq_trading_period_mode"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_date: Mapped[date] = mapped_column(Date, index=True)
+    start_hour: Mapped[int] = mapped_column(Integer)
+    end_hour: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class LogEntry(Base):

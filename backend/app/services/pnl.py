@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,9 @@ class PnlMetricsService:
 
     def summarize_positions(self, positions: list[Position], now: datetime | None = None) -> PnlSummary:
         current_time = self._aware(now or datetime.now(timezone.utc))
-        day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = current_time.astimezone(ZoneInfo("Europe/Simferopol")).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        ).astimezone(timezone.utc)
         week_start = current_time - timedelta(days=7)
 
         closed_positions = [position for position in positions if position.status == PositionStatus.CLOSED.value]

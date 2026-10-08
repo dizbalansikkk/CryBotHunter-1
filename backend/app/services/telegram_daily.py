@@ -67,6 +67,7 @@ class DailyReportSnapshot:
     report_date: date | None = None
     timezone_name: str = "Europe/Simferopol"
     periods: tuple[DailyPeriodReport, ...] = ()
+    day_includes_current_open_pnl: bool = True
 
 
 class TelegramDailyReportService:
@@ -201,7 +202,7 @@ class TelegramDailyReportService:
         return DailyReportSnapshot(
             generated_at=generated_at,
             paper_trading=bool(self.settings.paper_trading),
-            pnl_day=round(realized_day + float(pnl.open_pnl), 4),
+            pnl_day=round(realized_day + (float(pnl.open_pnl) if selected_date == local_now.date() else 0.0), 4),
             pnl_week=float(pnl.pnl_week),
             total_pnl=float(pnl.total_pnl),
             open_pnl=float(pnl.open_pnl),
@@ -228,6 +229,7 @@ class TelegramDailyReportService:
             report_date=selected_date,
             timezone_name=timezone_name,
             periods=periods,
+            day_includes_current_open_pnl=selected_date == local_now.date(),
         )
 
     def _periods(

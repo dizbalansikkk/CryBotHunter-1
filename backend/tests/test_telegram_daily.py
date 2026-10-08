@@ -140,3 +140,9 @@ async def test_daily_snapshot_uses_real_portfolio_learning_queue_and_workers():
     assert snapshot.periods[2].closed == 1
     assert snapshot.periods[2].net_pnl == 5
     assert snapshot.periods[2].fees == 0.25
+
+    historical = await TelegramDailyReportService(settings=settings).snapshot(
+        Db(), now=now + timedelta(days=1), report_date=now.date(),
+    )
+    assert historical.pnl_day == 5
+    assert not historical.day_includes_current_open_pnl

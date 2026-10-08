@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.entities import Candle
 from app.services.backtesting import BacktestingService
+from app.schemas.dto import StrategySignal
 
 
 def candles(count: int = 260):
@@ -68,3 +69,22 @@ def test_backtest_cost_model_reduces_trade_profit():
     assert realistic_profit < clean_profit
     assert service._apply_slippage(100.0, "buy", 10.0) > 100.0
     assert service._apply_slippage(100.0, "sell", 10.0) < 100.0
+
+
+def test_backtest_uses_trailing_quote_volume_and_real_price_change(monkeypatch):
+    service = BacktestingService()
+    history = candles(260)
+    observed = []
+
+    def observe(coin, **kwargs):
+        observed.append(coin)
+        return StrategySignal(symbol=coin.symbol, signal="WAIT", score=0, reasons=[])
+
+    monkeypatch.setattr(service.strategy, "evaluate", observe)
+    service.run(history)
+    last = observed[-1]
+    assert abs(last.volume_24h - sum(c.volume * c.close for c in history[-24:])) < 0.01
+    assert abs(last.price_change_percent - (history[-1].close / history[-25].close - 1) * 100) < 0.0001
+    assert last.open_interest == 0  # no fabricated historical derivatives data
+    baseline = sum(sum(c.volume * c.close for c in history[i-23:i+1]) for i in range(91, 259)) / 168
+    assert abs(last.volume_average_24h - baseline) < 0.01

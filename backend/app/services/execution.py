@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,7 +83,19 @@ class ExecutionService:
                     "leverage": 1,
                 }
             )
-            prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
+            if self.settings.paper_trading and reduce_only:
+                # Existing simulated inventory may predate a venue change or
+                # become dust after a partial exit. It must remain closeable,
+                # with its exact quantity and costs preserved in the ledger.
+                if not all(math.isfinite(value) and value > 0 for value in (amount, reference_price)):
+                    raise ValueError("Paper exit requires a positive finite amount and price")
+                prepared_order = PreparedOrder(
+                    amount=amount, fee_rate=self.settings.paper_fee_rate,
+                    min_amount=None, min_cost=None, metadata_available=False,
+                )
+                order.raw = {**order.raw, "paper_exit_exact_inventory": True}
+            else:
+                prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
             order.requested_amount = prepared_order.amount
             order.raw = {
                 **(order.raw or {}),

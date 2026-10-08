@@ -39,3 +39,12 @@ def test_pnl_summary_treats_naive_closed_at_as_utc():
 
     assert summary.pnl_day == -12.0
     assert summary.pnl_week == -12.0
+
+
+def test_day_starts_at_simferopol_midnight():
+    now = datetime(2026, 10, 7, 0, 30, tzinfo=timezone.utc)
+    rows = [
+        position("CLOSED", 2, datetime(2026, 10, 6, 21, 0, tzinfo=timezone.utc)),
+        position("CLOSED", 100, datetime(2026, 10, 6, 20, 59, tzinfo=timezone.utc)),
+    ]
+    assert PnlMetricsService().summarize_positions(rows, now).pnl_day == 2

@@ -13,11 +13,11 @@ from statistics import mean, pstdev
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.entities import Position, PositionStatus, TradePostMortem, UserSettings
+from app.models.entities import EquitySnapshot, Position, PositionStatus, StrategyRelease, TradePostMortem, UserSettings
 
 
 AUDIT_TIMEZONE = "Europe/Simferopol"
@@ -79,13 +79,47 @@ class TradingAuditService:
                 )
             ).scalars().all()
         )
-        return self.build(
+        report = self.build(
             closed,
             post_mortems,
             overlapping,
             user_settings,
             now=now,
         )
+        mode = "PAPER" if self.settings.paper_trading or not self.settings.live_trading_enabled else "LIVE"
+        count, first, last, max_dd = (await db.execute(select(
+            func.count(EquitySnapshot.id), func.min(EquitySnapshot.captured_at),
+            func.max(EquitySnapshot.captured_at), func.max(EquitySnapshot.drawdown_percent),
+        ).where(EquitySnapshot.mode == mode, EquitySnapshot.captured_at >= start_utc,
+                EquitySnapshot.captured_at < end_utc))).one()
+        collection_started = (await db.execute(select(func.min(EquitySnapshot.captured_at)).where(
+            EquitySnapshot.mode == mode,
+        ))).scalar_one()
+        report["capital_and_risk"]["historical_capital"] = {
+            "snapshots_in_period": count, "mode": mode,
+            "first": first.isoformat() if first else None, "last": last.isoformat() if last else None,
+            "collection_started_at": collection_started.isoformat() if collection_started else None,
+            "max_recorded_drawdown_percent": max_dd,
+            "message": "Показаны фактические срезы за период. Подробности по дням доступны в дневном аудите." if count else
+                       "За 30 полных дней отчёта срезов нет. Сегодняшние срезы доступны в дневном аудите; прошедший equity не восстановлен.",
+        }
+        releases = list((await db.execute(select(StrategyRelease).where(
+            StrategyRelease.deployed_at <= self._aware(now or datetime.now(timezone.utc)),
+        ).order_by(StrategyRelease.deployed_at.desc()).limit(30))).scalars().all())
+        if releases:
+            report["before_after_changes"] = {
+                "status": "RECORDED_RELEASES",
+                "message": "Журнал релизов доступен, включая сегодняшний день. Сам факт смены версии не доказывает влияние на доходность.",
+                "periods": [{"version": r.version, "deployed_at": r.deployed_at.isoformat(), "config_hash": r.config_hash} for r in releases],
+            }
+        for item in report["limitations"]:
+            if item["area"] == "Капитал и portfolio drawdown":
+                item["message"] = report["capital_and_risk"]["historical_capital"]["message"]
+            elif item["area"] == "До/после изменений" and releases:
+                item["message"] = "Релизы записываются; для причинного сравнения нужны сделки по каждой версии и сопоставимые рыночные условия."
+        report["final_15"] = self._final_15(report)
+        report["final_conclusion"] = self._final_conclusion(report)
+        return report
 
     def window(self, now: datetime | None = None) -> tuple[datetime, datetime]:
         current = self._aware(now or datetime.now(timezone.utc)).astimezone(self.tz)
@@ -368,6 +402,8 @@ class TradingAuditService:
         }
 
     def _loss_causes(self, losses: list[Any], mortems: list[Any]) -> dict[str, Any]:
+        loss_ids = {int(getattr(item, "id", 0) or 0) for item in losses}
+        mortems = [item for item in mortems if int(getattr(item, "position_id", 0) or 0) in loss_ids]
         labels = Counter()
         for item in mortems:
             value = getattr(item, "behavior_labels", []) or []
@@ -395,6 +431,8 @@ class TradingAuditService:
         }
 
     def _entry_analysis(self, losses: list[Any], mortems: list[Any]) -> dict[str, Any]:
+        loss_ids = {int(getattr(item, "id", 0) or 0) for item in losses}
+        mortems = [item for item in mortems if int(getattr(item, "position_id", 0) or 0) in loss_ids]
         paths = []
         for item in mortems:
             snapshot = getattr(item, "market_snapshot", {}) or {}
@@ -460,7 +498,7 @@ class TradingAuditService:
             "observed_close_reasons": dict(sorted(partial_exits.items())),
             "lost_potential_profit": {
                 "value": None,
-                "message": INSUFFICIENT + " Для всех закрытых сделок не хранится путь цены после выхода и MFE после закрытия. Post-mortem сохраняется только по убыточным сделкам и не покрывает потенциальную прибыль победителей.",
+                "message": INSUFFICIENT + " Для всех закрытых сделок не хранится путь цены после выхода и MFE после закрытия. Post-mortem описывает зафиксированный выход; потенциальная прибыль после выхода не восстанавливается.",
             },
         }
 
@@ -632,7 +670,7 @@ class TradingAuditService:
         return {
             "source": "Текущий исходный код; это описание реализованного алгоритма, а не реконструкция настроек исторической сделки.",
             "sequence": [
-                "Получение незакрытой 1h OHLCV и тикера по разрешённым spot-парам.",
+                "Получение завершённых 1h OHLCV и тикера по разрешённым парам основного рынка (по умолчанию фьючерсы).",
                 "Расчёт EMA20/50/200, RSI14, MACD(12,26), ATR14, 24h quote volume и среднего 24h объёма за предшествующие 7 дней.",
                 "Проверка режима рынка, качества рынка, стратегии, глобального/символьного guard, cooldown, pre-trade качества и risk/exposure limits.",
                 "Получение 1m стакана, ленты сделок и краткой динамики; вход только при достаточном количестве независимых источников и направлении, если опции не ослаблены.",
@@ -655,7 +693,7 @@ class TradingAuditService:
                 {"category": "Стакан", "parameter": "bid/ask, глубина, spread, imbalance", "used": True, "how": "Микроструктурный gate ограничивает spread и сверяет направленность imbalance."},
                 {"category": "Стакан", "parameter": "Крупные заявки", "used": True, "how": "Используется только явно помеченный iceberg_proxy, не доказательство скрытой заявки."},
                 {"category": "Стакан", "parameter": "Изменение ликвидности", "used": False, "how": "Нет отдельного правила сравнения ликвидности во времени при входе."},
-                {"category": "Фьючерсы", "parameter": "Funding Rate / Open Interest", "used": False, "how": "Текущий реальный spot-сканер записывает эти поля как 0; данные ликвидаций, long/short ratio и basis не получаются."},
+                {"category": "Фьючерсы", "parameter": "Funding Rate / Open Interest", "used": bool(get_settings().derivatives_context_enabled), "how": "Запрашивается фьючерсный контекст при включённом derivatives_context_enabled. Наличие данных фиксируется отдельно; недоступные показатели не считаются подтверждением сигнала."},
                 {"category": "Волатильность", "parameter": "ATR14", "used": True, "how": "Фильтр входа, ATR-стоп и первоначальный TP."},
                 {"category": "Волатильность", "parameter": "1m realized volatility", "used": True, "how": "Сохраняется в микроструктуре; базовый gate использует режим и краткий импульс."},
             ],
@@ -663,7 +701,7 @@ class TradingAuditService:
 
     def _external_sources(self) -> dict[str, Any]:
         rows = [
-            ("Binance News", False, "Не запрашивается", "—", False, False),
+            ("События Binance", bool(get_settings().binance_event_priority_enabled), "Кэшируемый календарь при включённом приоритете событий", "отдельные события Binance / BNB", True, False),
             ("Новости проектов / листинги / делистинги", False, "Не запрашиваются", "—", False, False),
             ("Макроэкономические новости", False, "Не запрашиваются", "—", False, False),
             ("Новости BTC/ETH", False, "Не запрашиваются", "—", False, False),
@@ -676,7 +714,7 @@ class TradingAuditService:
                 for source, used, frequency, data, entry, exit_ in rows
             ],
             "technical_only_entry": True,
-            "answer": "Да. В текущем коде нет источника новостей; при прохождении технических, риск- и микроструктурных условий агент может открыть сделку без новостной проверки.",
+            "answer": "Полной новостной проверки нет. Отдельный календарь событий Binance / BNB влияет на приоритет; направление входа определяется техническими, риск- и микроструктурными условиями.",
         }
 
     def _data_quality(self, closed: list[Any], losses: list[Any], mortems: list[Any]) -> dict[str, Any]:
@@ -686,8 +724,8 @@ class TradingAuditService:
             "loss_records": len(losses),
             "positions_with_entry_context": sum(bool(item) for item in contexts),
             "post_mortems": len(mortems),
-            "post_mortem_loss_coverage_percent": self._round(len(mortems) / len(losses) * 100) if losses else None,
-            "drawdown_definition": "Max DD в ежедневной таблице — максимум падения накопленного реализованного PnL закрытых сделок внутри дня, USDT. Это не portfolio-equity drawdown: исторических снимков equity нет.",
+            "post_mortem_loss_coverage_percent": self._round(len({getattr(m, "position_id", None) for m in mortems} & {getattr(p, "id", None) for p in losses}) / len(losses) * 100) if losses else None,
+            "drawdown_definition": "Max DD в ежедневной таблице — падение накопленного реализованного PnL закрытых сделок внутри дня, USDT. Portfolio-equity drawdown показывается отдельно по сохранённым срезам.",
             "currency": "USDT для PnL, gross profit/loss и realised drawdown; цены и объёмы не конвертируются.",
         }
 
