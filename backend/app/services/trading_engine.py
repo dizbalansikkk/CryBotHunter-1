@@ -27,6 +27,7 @@ from app.services.microstructure import EntryGatekeeper, MicrostructureService
 from app.services.optimizer import StrategyOptimizerService
 from app.services.performance_guard import PerformanceGuardReport, PerformanceGuardService
 from app.services.pnl import PnlMetricsService
+from app.services.paper_signals import paper_exploration_signal, paper_exploration_votes
 from app.services.pretrade_quality import PreTradeQualityGate
 from app.services.post_mortem import PostMortemService
 from app.services.portfolio_accounting import PortfolioAccountingService
@@ -308,6 +309,7 @@ class TradingEngine:
                     timeframe,
                     trade_settings,
                     learning_probe=exploration,
+                    direction=signal.signal,
                 )
                 if not quality.allowed:
                     accepted = False
@@ -806,40 +808,8 @@ class TradingEngine:
         closed = sum(1 for item in updates if item.status == "CLOSED")
         return TradingTickOut(checked=len(positions), closed=closed, updated=updates)
 
-    def _paper_exploration_signal(
-        self,
-        coin: MarketCoin,
-        signal: StrategySignal,
-    ) -> tuple[StrategySignal, bool]:
-        if (
-            not self.settings.paper_trading
-            or not self.settings.paper_exploration_enabled
-            or signal.signal != "WAIT"
-            or signal.score < self.settings.paper_exploration_min_score
-        ):
-            return signal, False
-
-        hard_blocks = ("blocked by market regime", "volatility too low", "volatility too high")
-        if any(marker in reason for marker in hard_blocks for reason in signal.reasons):
-            return signal, False
-
-        bullish_votes, bearish_votes = self._paper_exploration_votes(coin)
-        strongest_votes = max(bullish_votes, bearish_votes)
-        vote_margin = abs(bullish_votes - bearish_votes)
-        if (
-            strongest_votes < max(int(self.settings.paper_exploration_min_directional_votes), 1)
-            or vote_margin < max(int(self.settings.paper_exploration_min_vote_margin), 1)
-        ):
-            return signal, False
-        direction = "BUY" if bullish_votes > bearish_votes else "SELL"
-        reasons = [
-            (
-                "paper exploration from WAIT: "
-                f"bullish_votes={bullish_votes}, bearish_votes={bearish_votes}, margin={vote_margin}"
-            ),
-            *signal.reasons[:3],
-        ]
-        return StrategySignal(symbol=signal.symbol, signal=direction, score=signal.score, reasons=reasons), True
+    def _paper_exploration_signal(self, coin: MarketCoin, signal: StrategySignal) -> tuple[StrategySignal, bool]:
+        return paper_exploration_signal(self.settings, coin, signal)
 
     def _paper_learning_lane_enabled(self) -> bool:
         return bool(self.settings.paper_trading and self.settings.paper_exploration_enabled)
@@ -859,29 +829,7 @@ class TradingEngine:
         )
 
     def _paper_exploration_votes(self, coin: MarketCoin) -> tuple[int, int]:
-        bullish_votes = sum(
-            (
-                coin.regime in {"TRENDING_UP", "UNKNOWN"},
-                coin.ema20 > coin.ema50,
-                coin.ema50 > coin.ema200,
-                coin.price > coin.ema20,
-                coin.rsi >= 50,
-                coin.macd > 0,
-                coin.price_change_percent >= 0,
-            )
-        )
-        bearish_votes = sum(
-            (
-                coin.regime in {"TRENDING_DOWN", "UNKNOWN"},
-                coin.ema20 < coin.ema50,
-                coin.ema50 < coin.ema200,
-                coin.price < coin.ema20,
-                coin.rsi < 50,
-                coin.macd < 0,
-                coin.price_change_percent < 0,
-            )
-        )
-        return bullish_votes, bearish_votes
+        return paper_exploration_votes(coin)
 
     def _strategy_wait_reason(self, coin: MarketCoin, signal: StrategySignal) -> str:
         bullish_votes, bearish_votes = self._paper_exploration_votes(coin)

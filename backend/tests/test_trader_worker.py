@@ -56,7 +56,7 @@ def test_cycle_metrics_expose_opportunity_flow_and_top_blocker(monkeypatch):
     assert _cycle_metrics(decisions) == {
         "directional_candidates": 1,
         "strong_wait_candidates": 1,
-        "top_blocker": "STRATEGY_WAIT",
+        "top_blocker": "MICROSTRUCTURE",
     }
 
 

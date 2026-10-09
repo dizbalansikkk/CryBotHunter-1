@@ -252,11 +252,11 @@ def _cycle_metrics(decisions: list) -> dict[str, int | str]:
     directional = sum(decision.signal in {"BUY", "SELL"} for decision in decisions)
     min_score = int(get_settings().paper_exploration_min_score)
     strong_waits = sum(decision.signal == "WAIT" and decision.score >= min_score for decision in decisions)
-    blockers = Counter(
-        _cycle_blocker(decision.reason)
-        for decision in decisions
-        if decision.action == "SKIPPED"
-    )
+    # Explain why actionable candidates did not enter. A large set of WAIT
+    # symbols must not hide a failing gate on every directional candidate.
+    skipped = [decision for decision in decisions if decision.action == "SKIPPED"]
+    actionable = [decision for decision in skipped if decision.signal in {"BUY", "SELL"}]
+    blockers = Counter(_cycle_blocker(decision.reason) for decision in (actionable or skipped))
     top_blocker = blockers.most_common(1)[0][0] if blockers else "NONE"
     return {
         "directional_candidates": directional,

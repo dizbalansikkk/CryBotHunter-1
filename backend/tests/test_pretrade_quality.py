@@ -174,3 +174,22 @@ async def test_pretrade_quality_blocks_entry_until_required_history_is_available
     assert decision.allowed is False
     assert decision.risk_multiplier == 0.0
     assert decision.reason.startswith("pre-trade quality blocked")
+
+
+@pytest.mark.asyncio
+async def test_quality_evaluates_same_direction_lane_and_risk_settings(monkeypatch):
+    gate = PreTradeQualityGate()
+    observed = {}
+    async def history(db, symbol, timeframe, limit):
+        observed["limit"] = limit
+        return [object()] * 660
+    def walk_forward(candles, **kwargs):
+        observed.update(kwargs)
+        return report(windows=[window(test_trades_count=24)])
+    monkeypatch.setattr(gate, "_recent_candles", history)
+    monkeypatch.setattr(gate.backtester, "walk_forward", walk_forward)
+    await gate.assess(None, "DOT/USDT", "1h", risk_settings(), learning_probe=True, direction="SELL")
+    assert observed["limit"] == 2160
+    assert observed["direction"] == "SELL"
+    assert observed["learning_probe"] is True
+    assert observed["parameters"]["stop_loss_percent"] == risk_settings().stop_loss_percent

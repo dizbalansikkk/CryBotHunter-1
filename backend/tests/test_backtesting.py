@@ -88,3 +88,34 @@ def test_backtest_uses_trailing_quote_volume_and_real_price_change(monkeypatch):
     assert last.open_interest == 0  # no fabricated historical derivatives data
     baseline = sum(sum(c.volume * c.close for c in history[i-23:i+1]) for i in range(91, 259)) / 168
     assert abs(last.volume_average_24h - baseline) < 0.01
+
+
+def test_backtest_filters_opposite_direction(monkeypatch):
+    service = BacktestingService()
+    monkeypatch.setattr(service.strategy, "evaluate", lambda coin, **kw:
+        StrategySignal(symbol=coin.symbol, signal="BUY", score=90, reasons=[]))
+    assert service.run(candles(), direction="SELL").trades_count == 0
+    assert service.run(candles(), direction="BUY").trades_count > 0
+
+
+def test_walk_forward_fixed_entry_settings_are_not_reoptimized(monkeypatch):
+    service = BacktestingService()
+    calls = []
+    def fake_run(history, **kwargs):
+        calls.append(kwargs)
+        return service.summarize([])
+    monkeypatch.setattr(service, "run", fake_run)
+    monkeypatch.setattr(service, "_best_parameters", lambda *_: (_ for _ in ()).throw(AssertionError("must not optimize")))
+    parameters = {"stop_loss_percent": 2.0, "take_profit_percent": 4.0}
+    service.walk_forward(candles(520), train_size=260, test_size=120,
+        parameters=parameters, direction="SELL", learning_probe=True)
+    assert calls and all(c["direction"] == "SELL" and c["learning_probe"] for c in calls)
+    assert all(c["stop_loss_percent"] == 2.0 for c in calls)
+    assert any(c.get("trade_start_index") == 220 for c in calls)
+
+
+def test_walk_forward_includes_latest_candle_when_windows_do_not_divide_history():
+    history = candles(539)
+    result = BacktestingService().walk_forward(history, train_size=260, test_size=120,
+        parameters={"stop_loss_percent": 1.5, "take_profit_percent": 3.0})
+    assert result.windows[-1].test_end == history[-1].timestamp.isoformat()

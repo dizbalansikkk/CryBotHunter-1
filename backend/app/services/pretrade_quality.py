@@ -1,3 +1,5 @@
+import asyncio
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -35,14 +37,15 @@ class PreTradeQualityGate:
         risk_settings: RiskSettings,
         *,
         learning_probe: bool = False,
+        direction: str | None = None,
     ) -> PreTradeQualityAssessment:
         if not self.settings.pretrade_quality_enabled:
             return PreTradeQualityAssessment(True, "pre-trade quality gate disabled", 0)
 
-        candles = await self._recent_candles(db, symbol, timeframe, self.settings.pretrade_quality_min_candles + 240)
+        candles = await self._recent_candles(db, symbol, timeframe, max(self.settings.pretrade_quality_min_candles + 240, 2160))
         used_timeframe = timeframe
         if len(candles) < self.settings.pretrade_quality_min_candles and timeframe != "1h":
-            fallback_candles = await self._recent_candles(db, symbol, "1h", self.settings.pretrade_quality_min_candles + 240)
+            fallback_candles = await self._recent_candles(db, symbol, "1h", max(self.settings.pretrade_quality_min_candles + 240, 2160))
             if len(fallback_candles) > len(candles):
                 candles = fallback_candles
                 used_timeframe = "1h"
@@ -62,13 +65,27 @@ class PreTradeQualityGate:
         train_size = max(220, min(360, len(candles) // 2))
         test_size = max(80, min(160, len(candles) // 4))
         step_size = max(60, test_size)
-        report = self.backtester.walk_forward(candles, train_size=train_size, test_size=test_size, step_size=step_size)
+        # Validate the actual entry lane, side and exit settings, not an
+        # independently optimized strict strategy mixing LONG and SHORT.
+        report = await asyncio.to_thread(
+            self.backtester.walk_forward, candles, train_size=train_size,
+            test_size=test_size, step_size=step_size, direction=direction,
+            learning_probe=learning_probe,
+            parameters={"risk_per_trade": 10.0,
+                "stop_loss_percent": risk_settings.stop_loss_percent,
+                "take_profit_percent": risk_settings.take_profit_percent,
+                "trailing_stop_percent": risk_settings.trailing_stop_percent},
+        )
         return self._decision(report, len(candles), risk_settings, learning_probe=learning_probe)
 
     async def _recent_candles(self, db: AsyncSession, symbol: str, timeframe: str, limit: int) -> list[Candle]:
+        # Ingestion includes the developing candle; never evaluate it as final.
+        units = {"m": 60, "h": 3600, "d": 86400}
+        seconds = int(timeframe[:-1]) * units[timeframe[-1]]
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=seconds)
         result = await db.execute(
             select(Candle)
-            .where(Candle.symbol == symbol, Candle.timeframe == timeframe)
+            .where(Candle.symbol == symbol, Candle.timeframe == timeframe, Candle.timestamp <= cutoff)
             .order_by(Candle.timestamp.desc())
             .limit(limit)
         )

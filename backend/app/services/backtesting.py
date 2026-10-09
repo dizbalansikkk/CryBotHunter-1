@@ -9,6 +9,7 @@ from app.models.entities import Candle
 from app.schemas.dto import MarketCoin
 from app.services.market_scanner import MarketScanner
 from app.services.strategy import StrategyCore
+from app.services.paper_signals import paper_exploration_signal
 
 
 @dataclass
@@ -69,6 +70,8 @@ class BacktestingService:
         fee_rate: float | None = None,
         slippage_bps: float | None = None,
         trade_start_index: int = 0,
+        direction: str | None = None,
+        learning_probe: bool = False,
     ) -> BacktestReport:
         if len(candles) < 220:
             return self.summarize([])
@@ -177,7 +180,9 @@ class BacktestingService:
                 update={"regime": regime.name, "regime_score": regime.score, "regime_reason": regime.reason}
             )
             signal = self.strategy.evaluate(coin, average_volume=average_quote_volume_24h)
-            if signal.signal in {"BUY", "SELL"}:
+            if learning_probe:
+                signal, _ = paper_exploration_signal(self.settings, coin, signal)
+            if signal.signal in {"BUY", "SELL"} and (direction is None or signal.signal == direction):
                 entry = float(row["close"])
                 entry_side = "buy" if signal.signal == "BUY" else "sell"
                 entry_fill = self._apply_slippage(
@@ -212,16 +217,24 @@ class BacktestingService:
         train_size: int = 300,
         test_size: int = 120,
         step_size: int = 120,
+        *,
+        parameters: dict | None = None,
+        direction: str | None = None,
+        learning_probe: bool = False,
     ) -> WalkForwardReport:
         if len(candles) < train_size + test_size:
             return self._walk_forward_summary([])
 
         windows: list[WalkForwardWindow] = []
         index = 0
-        for start in range(0, len(candles) - train_size - test_size + 1, step_size):
+        # Anchor the final evaluation window to the latest completed candle.
+        offset = (len(candles) - train_size - test_size) % step_size
+        for start in range(offset, len(candles) - train_size - test_size + 1, step_size):
             train = candles[start : start + train_size]
             test = candles[start + train_size : start + train_size + test_size]
-            parameters, train_report = self._best_parameters(train)
+            selected, train_report = self._best_parameters(train) if parameters is None else (
+                parameters, self.run(train, **parameters, direction=direction, learning_probe=learning_probe)
+            )
             # The strategy relies on long-lookback indicators (EMA200). A
             # standalone 80-160 candle test slice cannot produce a comparable
             # signal, so warm it with trailing training candles. Entries are
@@ -230,8 +243,9 @@ class BacktestingService:
             warmup = train[-220:]
             test_report = self.run(
                 [*warmup, *test],
-                **parameters,
+                **selected,
                 trade_start_index=len(warmup),
+                direction=direction, learning_probe=learning_probe,
             )
             windows.append(
                 WalkForwardWindow(
@@ -240,7 +254,7 @@ class BacktestingService:
                     train_end=train[-1].timestamp.isoformat(),
                     test_start=test[0].timestamp.isoformat(),
                     test_end=test[-1].timestamp.isoformat(),
-                    parameters=parameters,
+                    parameters=selected,
                     train_profit=train_report.total_profit,
                     test_profit=test_report.total_profit,
                     test_win_rate=test_report.win_rate,

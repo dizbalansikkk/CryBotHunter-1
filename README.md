@@ -442,3 +442,13 @@ Supported commands:
 - Expand Strategy Lab with multi-symbol optimization, ML feature selection, and automated model promotion rules.
 - Replace Telegram polling with webhook mode if lower latency is needed.
 - Add pytest coverage for strategy, risk manager, auth, and trading engine.
+
+
+Pre-trade futures validation now checks the candidate BUY/SELL direction separately,
+uses the same Paper exploration signal function as the trading engine, and evaluates
+the selected stop/take/trailing settings instead of a separately optimized strategy.
+It reads up to 2160 completed candles and anchors the last out-of-sample window to
+the newest completed candle. Historical checks run off the asynchronous worker loop.
+Existing risk floors, cooldowns and live/Paper mode controls remain enforced; a lack
+of passing candidates does not cause an automatic forced entry. Cycle summaries
+prioritize blockers on directional candidates rather than masking them with WAITs.
