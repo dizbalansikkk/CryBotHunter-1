@@ -74,7 +74,10 @@ class PreTradeQualityGate:
             parameters={"risk_per_trade": 10.0,
                 "stop_loss_percent": risk_settings.stop_loss_percent,
                 "take_profit_percent": risk_settings.take_profit_percent,
-                "trailing_stop_percent": risk_settings.trailing_stop_percent},
+                "trailing_stop_percent": risk_settings.trailing_stop_percent,
+                "atr_stop_multiplier": risk_settings.atr_stop_multiplier,
+                "risk_reward_ratio": risk_settings.risk_reward_ratio,
+                "trailing_activation_r": self.settings.trailing_activation_r},
         )
         return self._decision(report, len(candles), risk_settings, learning_probe=learning_probe)
 

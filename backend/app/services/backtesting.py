@@ -10,6 +10,7 @@ from app.schemas.dto import MarketCoin
 from app.services.market_scanner import MarketScanner
 from app.services.strategy import StrategyCore
 from app.services.paper_signals import paper_exploration_signal
+from app.services.risk_manager import RiskManager
 
 
 @dataclass
@@ -72,6 +73,9 @@ class BacktestingService:
         trade_start_index: int = 0,
         direction: str | None = None,
         learning_probe: bool = False,
+        atr_stop_multiplier: float | None = None,
+        risk_reward_ratio: float = 2.0,
+        trailing_activation_r: float = 0.0,
     ) -> BacktestReport:
         if len(candles) < 220:
             return self.summarize([])
@@ -108,39 +112,27 @@ class BacktestingService:
         position: dict | None = None
         for _, row in frame.iterrows():
             if position:
-                exit_price = None
-                if position["side"] == "LONG":
-                    if trailing_stop_percent > 0:
-                        trailed_stop = float(row["close"]) * (1 - trailing_stop_percent / 100)
-                        position["stop"] = max(position["stop"], trailed_stop)
-                    if row["low"] <= position["stop"]:
-                        exit_price = position["stop"]
-                    elif row["high"] >= position["take"]:
-                        exit_price = position["take"]
-                    if exit_price is not None:
-                        exit_fill = self._apply_slippage(
-                            exit_price,
-                            "sell",
-                            self._dynamic_slippage_bps(row, effective_slippage_bps),
-                        )
-                        profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
-                        position = None
-                else:
-                    if trailing_stop_percent > 0:
-                        trailed_stop = float(row["close"]) * (1 + trailing_stop_percent / 100)
-                        position["stop"] = min(position["stop"], trailed_stop)
-                    if row["high"] >= position["stop"]:
-                        exit_price = position["stop"]
-                    elif row["low"] <= position["take"]:
-                        exit_price = position["take"]
-                    if exit_price is not None:
-                        exit_fill = self._apply_slippage(
-                            exit_price,
-                            "buy",
-                            self._dynamic_slippage_bps(row, effective_slippage_bps),
-                        )
-                        profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
-                        position = None
+                exit_price = self._bar_exit(position, row)
+                if exit_price is not None:
+                    exit_side = "sell" if position["side"] == "LONG" else "buy"
+                    exit_fill = self._apply_slippage(
+                        exit_price, exit_side,
+                        self._dynamic_slippage_bps(row, effective_slippage_bps),
+                    )
+                    profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
+                    position = None
+                elif trailing_stop_percent > 0:
+                    # The close is only known AFTER this bar. A stop calculated
+                    # from it becomes active on the next bar, never retroactively.
+                    close = float(row["close"])
+                    move = close - position["entry"] if position["side"] == "LONG" else position["entry"] - close
+                    position["favorable_move"] = max(position["favorable_move"], move)
+                    if position["favorable_move"] < position["initial_risk"] * trailing_activation_r:
+                        continue
+                    if position["side"] == "LONG":
+                        position["stop"] = max(position["stop"], close * (1 - trailing_stop_percent / 100))
+                    else:
+                        position["stop"] = min(position["stop"], close * (1 + trailing_stop_percent / 100))
                 if position:
                     continue
 
@@ -192,6 +184,13 @@ class BacktestingService:
                 )
                 stop = entry_fill * (1 - stop_loss_percent / 100) if signal.signal == "BUY" else entry_fill * (1 + stop_loss_percent / 100)
                 take = entry_fill * (1 + take_profit_percent / 100) if signal.signal == "BUY" else entry_fill * (1 - take_profit_percent / 100)
+                if atr_stop_multiplier is not None:
+                    plan = RiskManager().calculate_dynamic_exits(
+                        entry_price=entry_fill, atr=float(row["atr"]), side=signal.signal,
+                        atr_multiplier=atr_stop_multiplier, risk_reward_ratio=risk_reward_ratio,
+                        fallback_stop_percent=stop_loss_percent,
+                    )
+                    stop, take = plan.stop_loss, plan.take_profit
                 volume = risk_per_trade / abs(entry_fill - stop)
                 position = {
                     "side": "LONG" if signal.signal == "BUY" else "SHORT",
@@ -199,6 +198,8 @@ class BacktestingService:
                     "stop": stop,
                     "take": take,
                     "volume": volume,
+                    "initial_risk": abs(entry_fill - stop),
+                    "favorable_move": 0.0,
                 }
         if position and not frame.empty:
             last = frame.iloc[-1]
@@ -210,6 +211,35 @@ class BacktestingService:
             )
             profits.append(self._profit_after_costs(position, exit_fill, effective_fee_rate))
         return self.summarize(profits)
+
+    @staticmethod
+    def _bar_exit(position: dict, row) -> float | None:
+        """Use the stop active at bar open; stop wins ambiguous intrabar ties.
+
+        A gap through a stop fills at the worse opening price. A favourable
+        target gap keeps the target price rather than assuming improvement.
+        """
+        opening = float(row["open"])
+        stop, take = position["stop"], position["take"]
+        if position["side"] == "LONG":
+            if opening <= stop:
+                return opening
+            if opening >= take:
+                return take
+            if row["low"] <= stop:
+                return stop
+            if row["high"] >= take:
+                return take
+        else:
+            if opening >= stop:
+                return opening
+            if opening <= take:
+                return take
+            if row["high"] >= stop:
+                return stop
+            if row["low"] <= take:
+                return take
+        return None
 
     def walk_forward(
         self,

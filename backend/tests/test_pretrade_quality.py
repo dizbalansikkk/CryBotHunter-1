@@ -193,3 +193,6 @@ async def test_quality_evaluates_same_direction_lane_and_risk_settings(monkeypat
     assert observed["direction"] == "SELL"
     assert observed["learning_probe"] is True
     assert observed["parameters"]["stop_loss_percent"] == risk_settings().stop_loss_percent
+
+    assert observed["parameters"]["atr_stop_multiplier"] == risk_settings().atr_stop_multiplier
+    assert observed["parameters"]["risk_reward_ratio"] == risk_settings().risk_reward_ratio

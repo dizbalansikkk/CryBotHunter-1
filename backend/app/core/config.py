@@ -166,6 +166,7 @@ class Settings(BaseSettings):
     max_same_side_positions: int = 2
     directional_risk_reduction_start: int = 1
     directional_risk_multiplier: float = 0.5
+    trailing_activation_r: float = Field(default=1.0, ge=0.0)
     pretrade_quality_enabled: bool = True
     pretrade_quality_min_candles: int = 420
     pretrade_quality_min_profit_factor: float = 1.1

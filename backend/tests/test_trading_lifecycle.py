@@ -814,3 +814,22 @@ async def test_drawdown_limit_activates_only_close_and_critical_notification():
     assert engine.control.reason.startswith("risk_drawdown:5.45%")
     assert "ONLY CLOSE" in engine.telegram.messages[0]
     assert db.added[0].level == "CRITICAL"
+
+
+@pytest.mark.parametrize("side,high,low,stop,armed_high,armed_low,expected", [
+    ("LONG", 100.5, 100, 96, 104, 100, 103.168),
+    ("SHORT", 100, 99.5, 104, 100, 96, 96.768),
+])
+def test_trailing_preserves_atr_stop_until_one_r(side, high, low, stop, armed_high, armed_low, expected):
+    position = Position(symbol="ETH/USDT", side=side, entry_price=100,
+        initial_risk=4, stop=stop, highest_price=high, lowest_price=low,
+        trailing_stop_percent=0.8, entry_context={"exit_plan": {"trailing_activation_r": 1.0}})
+    engine = TradingEngine()
+    engine._apply_trailing_stop(position)
+    assert position.stop == stop
+    position.highest_price, position.lowest_price = armed_high, armed_low
+    engine._apply_trailing_stop(position)
+    assert position.stop == pytest.approx(expected)
+    position.highest_price, position.lowest_price = high, low
+    engine._apply_trailing_stop(position)
+    assert position.stop == pytest.approx(expected)

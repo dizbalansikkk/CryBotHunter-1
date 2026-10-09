@@ -452,3 +452,13 @@ the newest completed candle. Historical checks run off the asynchronous worker l
 Existing risk floors, cooldowns and live/Paper mode controls remain enforced; a lack
 of passing candidates does not cause an automatic forced entry. Cycle summaries
 prioritize blockers on directional candidates rather than masking them with WAITs.
+
+
+Trailing protection preserves the initial ATR stop until the favourable move reaches
+`TRAILING_ACTIVATION_R` (default 1.0, measured against initial stop distance). The
+activation value is recorded with new positions; already tightened stops never widen.
+Pre-trade validation uses the same ATR multiplier, reward ratio and activation value.
+OHLCV backtests apply closing-based trailing changes from the next candle, fill stop
+gaps at the opening price and resolve ambiguous intrabar stop/target hits stop-first.
+These tests remain approximations: hourly bars do not reproduce tick paths, partial
+fills, funding payments or the full dynamic partial-exit lifecycle.

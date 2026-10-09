@@ -1037,6 +1037,7 @@ class TradingEngine:
             "entry_atr": round(float(coin.atr or 0.0), 8),
             "atr_stop_multiplier": round(float(settings.atr_stop_multiplier), 4),
             "initial_risk": round(float(initial_risk), 8),
+            "trailing_activation_r": self.settings.trailing_activation_r,
         }
         entry_context["paper_exploration"] = paper_exploration
         entry_context["decision_reason"] = decision_reason
@@ -2114,6 +2115,16 @@ class TradingEngine:
 
     def _apply_trailing_stop(self, position: Position) -> None:
         if position.trailing_stop_percent <= 0:
+            return
+        context = position.entry_context if isinstance(position.entry_context, dict) else {}
+        plan = context.get("exit_plan") or {}
+        activation_r = max(float(plan.get("trailing_activation_r", self.settings.trailing_activation_r)), 0.0)
+        initial_risk = float(position.initial_risk or abs(position.entry_price - position.stop))
+        favorable_move = (position.highest_price - position.entry_price if position.side == "LONG"
+                          else position.entry_price - position.lowest_price)
+        # Preserve the ATR breathing room until the position earns a trail.
+        # Existing stops are never moved away from the current protected level.
+        if favorable_move < initial_risk * activation_r:
             return
         if position.side == "LONG":
             trailing_stop = position.highest_price * (1 - position.trailing_stop_percent / 100)
