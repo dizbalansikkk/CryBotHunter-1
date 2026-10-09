@@ -1,3 +1,4 @@
+import ProfitEventsPanel from "./ProfitEventsPanel";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -1380,6 +1381,7 @@ function LogsView() {
   });
   return (
     <section className="space-y-5">
+      <ProfitEventsPanel />
       <Header title="Логи" subtitle="Причины входов и отказов, контроль риска и жизненный цикл сделок">
         <button className="btn primary" onClick={downloadTradingAudit} disabled={exporting}>
           <Download size={16} /> {exporting ? "Готовим архив" : "Выгрузить аудит сделок"}
@@ -1459,7 +1461,7 @@ function describeLog(log: LogEntry) {
     POSITION_PRICE_UNAVAILABLE: { title: "Нет безопасной цены для контроля позиции", explanation: "Проверка SL/TP остановлена для этого цикла, потому что текущая цена не была получена надёжно." },
     POSITION_TICKER_SNAPSHOT_FAILED: { title: "Не получен тикер позиции", explanation: "Снимок текущей цены не получен. Повтор будет выполнен в следующем цикле без изменения позиции." },
     POSITION_MARKET_SNAPSHOT_FAILED: { title: "Не получен рыночный снимок", explanation: "Дополнительные данные рынка недоступны. Бот сохраняет ошибку и не выдаёт их за нормальные данные." },
-    BREAKEVEN_APPLIED: { title: "Стоп перенесён в безубыток", explanation: "После подтверждённого движения позиции защита перенесена к цене безубытка с учётом сохранённого правила." },
+    BREAKEVEN_APPLIED: { title: "Стоп перенесён в безубыток", explanation: "После исполнения TP1 локальный стоп перенесён к безубытку. Подтверждение биржевого стопа записывается отдельным событием; перенос стопа сам по себе не фиксирует прибыль." },
     BREAKEVEN_STOP_CONFIRMATION_PENDING: { title: "Подтверждение безубыточного стопа ожидается", explanation: "TP1 уже исполнен, но биржа ещё не подтвердила новый стоп. Локальный мониторинг контролирует возврат к цене защиты." },
     DYNAMIC_TAKE_PROFIT_EXTENDED: { title: "Целевой TP продлён", explanation: "Импульс сохраняется, поэтому часть позиции удерживается по динамическому плану, а защитный стоп зафиксирован." },
     DYNAMIC_TAKE_PROFIT_FAILED: { title: "Динамическая фиксация не исполнена", explanation: "Биржа не подтвердила операцию динамического TP. Позиция остаётся под существующей защитой до следующей проверки." },
@@ -1510,13 +1512,13 @@ function isLogScalar(value: unknown): value is string | number | boolean {
 }
 
 function summarizeLogContext(context: Record<string, unknown>) {
-  const keys = ["symbol", "side", "signal", "gate", "position_id", "pnl", "entry_price", "exit_price", "stop", "take", "risk_percent", "order_status", "exit_reason"];
+  const keys = ["symbol", "side", "signal", "gate", "position_id", "stage", "order_id", "executed_at", "filled_volume", "remaining_volume", "partial_profit", "pnl", "entry_price", "exit_price", "stop", "take", "risk_percent", "order_status", "exit_reason"];
   return keys.flatMap((key) => isLogScalar(context[key]) ? [`${logFieldLabel(key)}: ${formatLogValue(key, context[key])}`] : []);
 }
 
 function logFieldLabel(key: string) {
   const labels: Record<string, string> = {
-    event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", explanation: "Подробное объяснение", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок", evaluated_agents: "Оценено аналитиков"
+    stage: "Этап", executed_at: "Время исполнения", fill_confirmed: "Исполнение подтверждено", mode: "Режим", event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", explanation: "Подробное объяснение", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок", evaluated_agents: "Оценено аналитиков"
   };
   return labels[key] ?? key.replace(/_/g, " ");
 }

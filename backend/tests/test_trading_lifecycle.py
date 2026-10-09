@@ -833,3 +833,39 @@ def test_trailing_preserves_atr_stop_until_one_r(side, high, low, stop, armed_hi
     position.highest_price, position.lowest_price = high, low
     engine._apply_trailing_stop(position)
     assert position.stop == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,filled,confirmed", [("FILLED", 0.25, True), ("PARTIAL", 0.1, True), ("FAILED", 0.0, False), ("FILLED", 0.0, False)])
+async def test_tp1_journal_contains_only_actual_execution_once(monkeypatch, status, filled, confirmed):
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+    position = Position(id=71, symbol="ETH/USDT", side="LONG", entry_price=100,
+        current_price=101, volume=1, stop=96, take=110, partial_taken=False,
+        partial_close_percent=25, entry_context={})
+    engine = TradingEngine()
+    engine.settings = SimpleNamespace(paper_trading=True, telegram_trade_reports_enabled=False)
+    instant = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    order = Order(id=82, status=status, filled_amount=filled, average_price=101,
+        fee=0.01, updated_at=instant, exchange_order_id="test-fill")
+    engine.execution = SimpleNamespace(assess_exit_size=AsyncMock(return_value=SimpleNamespace(allowed=True)),
+        execute_market=AsyncMock(return_value=order))
+    monkeypatch.setattr(engine, "_partial_take_profit_reached", lambda *_: True)
+    async def record(db, target, **kw):
+        target.volume -= kw["exit_volume"]
+        return kw["exit_volume"], 0.24
+    monkeypatch.setattr(engine, "_record_partial_exit", record)
+    items = []
+    db = SimpleNamespace(add=items.append)
+    await engine._apply_partial_take_profit(db, position, 101)
+    fills = [item for item in items if item.context["event"] == "POSITION_PARTIALLY_CLOSED"]
+    assert len(fills) == int(confirmed)
+    if confirmed:
+        context = fills[0].context
+        assert context["stage"] == "TP1" and context["order_id"] == 82
+        assert context["executed_at"] == instant.isoformat()
+        assert context["filled_volume"] == filled
+        assert context["remaining_volume"] == 1 - filled
+        assert context["partial_profit"] == 0.24 and context["mode"] == "PAPER"
+        await engine._apply_partial_take_profit(db, position, 101)
+        assert len([item for item in items if item.context["event"] == "POSITION_PARTIALLY_CLOSED"]) == 1

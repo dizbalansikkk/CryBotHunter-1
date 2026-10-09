@@ -462,3 +462,13 @@ OHLCV backtests apply closing-based trailing changes from the next candle, fill 
 gaps at the opening price and resolve ambiguous intrabar stop/target hits stop-first.
 These tests remain approximations: hourly bars do not reproduce tick paths, partial
 fills, funding payments or the full dynamic partial-exit lifecycle.
+
+
+The Journal includes a dedicated exit/protection history with position-ID filtering
+and older-page navigation. GET `/api/v1/logs?category=exits&position_id=71&before_id=1000`
+filters in the database before pagination (authenticated, same access as existing logs).
+TP1/TP2/dynamic and final exits include actual fill time, order ID, executed quantity,
+remaining quantity, exit fee and stage PnL; entry fees remain in the final position PnL.
+Breakeven stop movement is separate from a filled exit and from exchange acknowledgement.
+No successful fixation event is emitted for rejected/zero-fill orders. Historical
+missing fields are displayed as missing; audit ZIP exports include protection and TP2 events.

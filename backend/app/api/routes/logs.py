@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,16 @@ from app.services.trade_export import TradeAuditExportService
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 
+EXIT_AUDIT_EVENTS = (
+    "POSITION_PARTIALLY_CLOSED", "SECOND_TAKE_PROFIT_FILLED",
+    "DYNAMIC_TAKE_PROFIT_EXTENDED", "POSITION_EXIT_PARTIALLY_FILLED", "POSITION_CLOSED",
+    "BREAKEVEN_APPLIED", "PROTECTIVE_STOP_CONFIRMED", "PROTECTIVE_STOP_UNCONFIRMED",
+    "BREAKEVEN_STOP_CONFIRMATION_PENDING", "PARTIAL_TAKE_PROFIT_FAILED",
+    "SECOND_TAKE_PROFIT_FAILED", "DYNAMIC_TAKE_PROFIT_FAILED", "POSITION_CLOSE_FAILED",
+    "SCALE_OUT_CANCELLED_MIN_NOTIONAL",
+)
+
+
 @router.get("/trading-audit")
 async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> Response:
     positions = list((await db.execute(select(Position).order_by(Position.entered_at.asc()))).scalars().all())
@@ -22,6 +33,7 @@ async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depe
         (await db.execute(select(TradePostMortem).order_by(TradePostMortem.closed_at.asc()))).scalars().all()
     )
     event_filter = or_(
+        LogEntry.context["event"].as_string().in_(EXIT_AUDIT_EVENTS),
         LogEntry.message.ilike("Opened % position for %"),
         LogEntry.message.ilike("Closed %"),
         LogEntry.message.ilike("Partially closed %"),
@@ -67,6 +79,19 @@ async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depe
 
 
 @router.get("", response_model=list[LogOut])
-async def logs(_: User = Depends(current_user), db: AsyncSession = Depends(get_db), limit: int = 100) -> list[LogEntry]:
-    query = select(LogEntry).order_by(LogEntry.created_at.desc()).limit(min(limit, 500))
+async def logs(
+    _: User = Depends(current_user), db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=100, ge=1, le=500),
+    category: Literal["all", "exits"] = "all",
+    position_id: int | None = Query(default=None, ge=1),
+    before_id: int | None = Query(default=None, ge=1),
+) -> list[LogEntry]:
+    query = select(LogEntry)
+    if category == "exits":
+        query = query.where(LogEntry.context["event"].as_string().in_(EXIT_AUDIT_EVENTS))
+    if position_id is not None:
+        query = query.where(LogEntry.context["position_id"].as_string() == str(position_id))
+    if before_id is not None:
+        query = query.where(LogEntry.id < before_id)
+    query = query.order_by(LogEntry.id.desc()).limit(limit)
     return list((await db.execute(query)).scalars().all())

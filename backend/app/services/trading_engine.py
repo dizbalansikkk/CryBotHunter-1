@@ -691,20 +691,6 @@ class TradingEngine:
             else:
                 stop_before_updates = position.stop
                 first_partial_volume = await self._apply_partial_take_profit(db, position, price, cycle_id=cycle_id)
-                if first_partial_volume:
-                    self._log_trading_event(
-                        db,
-                        "INFO",
-                        "POSITION_PARTIALLY_CLOSED",
-                        f"Partially closed {position.symbol} #{position.id}: remaining={position.volume:.6f}",
-                        cycle_id=cycle_id,
-                        symbol=position.symbol,
-                        position_id=position.id,
-                        side=position.side,
-                        current_price=price,
-                        remaining_volume=position.volume,
-                        pnl=position.pnl,
-                    )
                 # The stop is protected only after the exchange confirms TP1.
                 # A price merely touching its trigger is not an execution event.
                 if first_partial_volume and self._apply_breakeven(position):
@@ -724,6 +710,9 @@ class TradingEngine:
                         stop=position.stop,
                         requested_offset_percent=protection.get("requested_offset_percent"),
                         effective_offset_percent=protection.get("effective_offset_percent"),
+                        stage="BREAKEVEN", execution_status="LOCAL_STOP_UPDATED",
+                        remaining_volume=position.volume,
+                        mode="PAPER" if self.settings.paper_trading else "LIVE",
                     )
                     if self.settings.telegram_trade_reports_enabled:
                         await self.telegram.broadcast(
@@ -838,6 +827,19 @@ class TradingEngine:
             f"strategy WAIT score={signal.score}, rating={coin.rating}, "
             f"bullish_votes={bullish_votes}, bearish_votes={bearish_votes}: {missing}"
         )
+
+    def _fill_audit(self, order: Order, stage: str) -> dict:
+        """Execution evidence, shared by partial and final exit journal events."""
+        executed_at = order.updated_at or datetime.now(timezone.utc)
+        return {
+            "stage": stage, "fill_confirmed": True,
+            "mode": "PAPER" if getattr(self.settings, "paper_trading", False) else "LIVE",
+            "order_id": order.id, "exchange_order_id": order.exchange_order_id,
+            "order_status": order.status,
+            "execution_status": "FILL_CONFIRMED",
+            "executed_at": executed_at.isoformat(),
+            "execution_time_source": "ORDER_ACKNOWLEDGED_AT",
+        }
 
     def _log_trading_event(
         self,
@@ -1521,6 +1523,15 @@ class TradingEngine:
             return 0.0
         position.partial_taken = True
         self._mark_scale_out_taken(position, "tp1", exit_order.average_price, closed_volume)
+        self._log_trading_event(
+            db, "INFO", "POSITION_PARTIALLY_CLOSED",
+            f"TP1 filled for {position.symbol} #{position.id}: volume={closed_volume}, price={exit_order.average_price}, pnl={partial_profit}",
+            cycle_id=cycle_id, symbol=position.symbol, position_id=position.id,
+            side=position.side, requested_volume=close_volume, filled_volume=closed_volume,
+            remaining_volume=position.volume, exit_price=exit_order.average_price,
+            exit_fee=exit_order.fee, partial_profit=partial_profit,
+            **self._fill_audit(exit_order, "TP1"),
+        )
         if self.settings.telegram_trade_reports_enabled:
             await self.telegram.broadcast(
                 format_partial_take_profit(
@@ -1620,6 +1631,8 @@ class TradingEngine:
             remaining_volume=position.volume,
             partial_profit=partial_profit,
             pnl=position.pnl,
+            exit_fee=exit_order.fee,
+            **self._fill_audit(exit_order, "TP2"),
         )
         if self.settings.telegram_trade_reports_enabled:
             await self.telegram.broadcast(
@@ -1785,6 +1798,7 @@ class TradingEngine:
             exit_fee=exit_order.fee,
             partial_profit=partial_profit,
             pnl=position.pnl,
+            **self._fill_audit(exit_order, "TP3_PARTIAL"),
         )
         if self.settings.telegram_trade_reports_enabled:
             await self.telegram.broadcast(
@@ -1959,6 +1973,7 @@ class TradingEngine:
                 exit_fee=exit_order.fee,
                 partial_profit=partial_profit,
                 pnl=position.pnl,
+                **self._fill_audit(exit_order, "FINAL_PARTIAL"),
             )
             return
         position.status = "CLOSED"
@@ -2084,9 +2099,12 @@ class TradingEngine:
             entry_price=position.entry_price,
             exit_price=exit_order.average_price,
             volume=position.volume,
+            filled_volume=closed_volume, remaining_volume=0.0,
+            partial_profit=round(self._profit_for_volume(position, exit_order.average_price, closed_volume) - exit_order.fee, 4),
             entry_fee=entry_execution.get("fee") if isinstance(entry_execution, dict) else None,
             exit_fee=exit_order.fee,
             exit_slippage=exit_order.slippage,
+            **self._fill_audit(exit_order, "FINAL"),
         )
         self._log_trading_event(
             db,
