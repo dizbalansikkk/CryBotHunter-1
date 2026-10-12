@@ -155,3 +155,16 @@ def service_settings(monkeypatch):
     monkeypatch.setattr(settings, "symbol_guard_cooldown_hours", 24.0)
     monkeypatch.setattr(settings, "symbol_guard_recovery_risk_multiplier", 0.25)
     return settings
+
+
+@pytest.mark.asyncio
+async def test_paper_exploration_gets_its_own_symbol_quarantine(monkeypatch):
+    service = PerformanceGuardService()
+    now = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
+    service_settings(monkeypatch)
+    rows = [(-0.3, now - timedelta(hours=1), {"paper_exploration": True}) for _ in range(5)]
+    rows += [(1.0, now - timedelta(hours=2), {}) for _ in range(5)]
+    paper = await service.evaluate_symbol(Db(rows), "AAVE/USDT", now=now, exploration=True)
+    normal = await service.evaluate_symbol(Db(rows), "AAVE/USDT", now=now)
+    assert not paper.allowed and paper.loss_streak == 5
+    assert normal.allowed and normal.total_profit == 5.0

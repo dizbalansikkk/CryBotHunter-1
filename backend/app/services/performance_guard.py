@@ -87,6 +87,7 @@ class PerformanceGuardService:
         symbol: str,
         *,
         now: datetime | None = None,
+        exploration: bool = False,
     ) -> PerformanceGuardReport:
         """Protect a single pair without halting otherwise healthy markets."""
         settings = get_settings()
@@ -100,16 +101,17 @@ class PerformanceGuardService:
                 .where(
                     Position.status == "CLOSED",
                     Position.symbol == symbol,
+                    func.coalesce(Position.entry_context["paper_exploration"].as_boolean(), False) == exploration,
                     Position.closed_at.is_not(None),
                 )
                 .order_by(Position.closed_at.desc(), Position.id.desc())
-                .limit(limit * 10)
+                .limit(limit)
             )
         ).all()
         rows = [
             (float(row[0]), row[1])
             for row in raw_rows
-            if not self._is_paper_exploration(row[2] if len(row) > 2 else None)
+            if self._is_paper_exploration(row[2] if len(row) > 2 else None) == exploration
         ][:limit]
         if len(rows) < limit:
             return PerformanceGuardReport(True, "not enough closed trades for symbol guard", len(rows), 0, 0, 0)

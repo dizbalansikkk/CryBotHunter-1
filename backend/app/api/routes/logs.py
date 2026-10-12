@@ -14,6 +14,8 @@ from app.services.trade_export import TradeAuditExportService
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 
+LEARNING_EVENTS = ("LEARNING_UPDATED", "LEARNING_APPLIED", "AGENT_LEARNING_UPDATED")
+
 EXIT_AUDIT_EVENTS = (
     "POSITION_PARTIALLY_CLOSED", "SECOND_TAKE_PROFIT_FILLED",
     "DYNAMIC_TAKE_PROFIT_EXTENDED", "POSITION_EXIT_PARTIALLY_FILLED", "POSITION_CLOSED",
@@ -33,7 +35,7 @@ async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depe
         (await db.execute(select(TradePostMortem).order_by(TradePostMortem.closed_at.asc()))).scalars().all()
     )
     event_filter = or_(
-        LogEntry.context["event"].as_string().in_(EXIT_AUDIT_EVENTS),
+        LogEntry.context["event"].as_string().in_((*EXIT_AUDIT_EVENTS, *LEARNING_EVENTS)),
         LogEntry.message.ilike("Opened % position for %"),
         LogEntry.message.ilike("Closed %"),
         LogEntry.message.ilike("Partially closed %"),
@@ -82,13 +84,15 @@ async def trading_audit(_: User = Depends(current_user), db: AsyncSession = Depe
 async def logs(
     _: User = Depends(current_user), db: AsyncSession = Depends(get_db),
     limit: int = Query(default=100, ge=1, le=500),
-    category: Literal["all", "exits"] = "all",
+    category: Literal["all", "exits", "learning"] = "all",
     position_id: int | None = Query(default=None, ge=1),
     before_id: int | None = Query(default=None, ge=1),
 ) -> list[LogEntry]:
     query = select(LogEntry)
     if category == "exits":
         query = query.where(LogEntry.context["event"].as_string().in_(EXIT_AUDIT_EVENTS))
+    if category == "learning":
+        query = query.where(LogEntry.context["event"].as_string().in_(LEARNING_EVENTS))
     if position_id is not None:
         query = query.where(LogEntry.context["position_id"].as_string() == str(position_id))
     if before_id is not None:

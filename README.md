@@ -472,3 +472,13 @@ remaining quantity, exit fee and stage PnL; entry fees remain in the final posit
 Breakeven stop movement is separate from a filled exit and from exchange acknowledgement.
 No successful fixation event is emitted for rejected/zero-fill orders. Historical
 missing fields are displayed as missing; audit ZIP exports include protection and TP2 events.
+
+
+Learning updates now normalize outcomes by original stop distance × original filled
+volume (R), rather than treating every small Paper loss as negligible. Missing legacy
+risk metadata retains the old PnL fallback and is labelled explicitly. Zero PnL is
+neutral. A position's committed learning-update marker prevents replaying its outcome.
+Symbol performance checks apply separately to Paper exploration and ordinary entries.
+The Journal learning filter records matched rule IDs, observed wins/losses, risk before
+and after memory, and rule updates at closure. These are audit evidence of adaptation,
+not evidence that a strategy has become profitable or that an RL model was promoted.

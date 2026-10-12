@@ -271,8 +271,8 @@ class TradingEngine:
                 if not cooldown.allowed:
                     accepted = False
                     reason = cooldown.reason
-            if accepted and not exploration:
-                symbol_guard = await self.guard.evaluate_symbol(db, coin.symbol)
+            if accepted:
+                symbol_guard = await self.guard.evaluate_symbol(db, coin.symbol, exploration=exploration)
                 if not symbol_guard.allowed:
                     accepted = False
                     reason = symbol_guard.reason
@@ -284,6 +284,16 @@ class TradingEngine:
                     reason = f"{reason}; {symbol_guard.reason}"
             if accepted:
                 learning = await self.learning.assess_entry(db, coin, signal.signal)
+                if learning.penalty > 0:
+                    self._log_trading_event(db, "INFO" if learning.allowed else "WARNING", "LEARNING_APPLIED",
+                        f"Память {coin.symbol}: {learning.reason}", cycle_id=cycle_id,
+                        symbol=coin.symbol, side="LONG" if signal.signal == "BUY" else "SHORT",
+                        learning_action="BLOCK" if not learning.allowed else "REDUCE_RISK" if learning.risk_multiplier < 1 else "OBSERVE",
+                        risk_before=trade_settings.risk_percent,
+                        risk_after=round(trade_settings.risk_percent * learning.risk_multiplier, 4),
+                        risk_multiplier=learning.risk_multiplier, penalty=learning.penalty,
+                        matched_rules=learning.matched_rules, reason=learning.reason)
+
                 if not learning.allowed:
                     accepted = False
                     reason = learning.reason
@@ -2060,7 +2070,7 @@ class TradingEngine:
                 exit_reason=reason,
                 error_type=type(exc).__name__,
             )
-        await self.learning.record_closed_position(db, position, position.pnl, reason)
+        learning_update = await self.learning.record_closed_position(db, position, position.pnl, reason)
         await self.agents.competition.record_closed_position(db, position)
         try:
             await self.context.remember_trade(
@@ -2116,6 +2126,7 @@ class TradingEngine:
             position_id=position.id,
             exit_reason=reason,
             pnl=position.pnl,
+            **(learning_update or {}),
         )
         if self.settings.telegram_trade_reports_enabled:
             await self.telegram.broadcast(

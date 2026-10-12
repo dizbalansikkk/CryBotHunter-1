@@ -1342,16 +1342,16 @@ function LogsView() {
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [error, setError] = React.useState("");
   const [exporting, setExporting] = React.useState(false);
-  const [filter, setFilter] = React.useState<"all" | "trading" | "attention">("trading");
+  const [filter, setFilter] = React.useState<"all" | "trading" | "attention" | "learning">("trading");
   const load = React.useCallback(async () => {
     try {
       setError("");
-      setLogs((await api.get("/logs")).data);
+      setLogs((await api.get("/logs", {params: {category: filter === "learning" ? "learning" : "all"}})).data);
     } catch (err) {
       setError(readError(err));
     }
-  }, []);
-  React.useEffect(() => void load(), [load]);
+  }, [filter]);
+  React.useEffect(() => { void load(); const timer = window.setInterval(load, 30000); return () => window.clearInterval(timer); }, [load]);
   async function downloadTradingAudit() {
     try {
       setExporting(true);
@@ -1375,6 +1375,7 @@ function LogsView() {
   }
   const visibleLogs = logs.filter((log) => {
     const hasTradingEvent = typeof log.context?.event === "string";
+    if (filter === "learning") return ["LEARNING_UPDATED", "LEARNING_APPLIED", "AGENT_LEARNING_UPDATED"].includes(String(log.context?.event));
     if (filter === "trading") return hasTradingEvent;
     if (filter === "attention") return ["WARNING", "ERROR"].includes(log.level.toUpperCase());
     return true;
@@ -1394,6 +1395,7 @@ function LogsView() {
         <button type="button" className={`log-filter-button ${filter === "trading" ? "active" : ""}`} onClick={() => setFilter("trading")}>Сделки и защита</button>
         <button type="button" className={`log-filter-button ${filter === "attention" ? "active" : ""}`} onClick={() => setFilter("attention")}>Требует внимания</button>
         <button type="button" className={`log-filter-button ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>Все записи</button>
+        <button type="button" className={`log-filter-button ${filter === "learning" ? "active" : ""}`} onClick={() => setFilter("learning")}>Обучение: изменения и решения</button>
         <span className="muted">Показано: {visibleLogs.length} из {logs.length}</span>
       </div>
       <div className="table-wrap">
@@ -1415,6 +1417,7 @@ function LogsView() {
                     <p>{presentation.explanation}</p>
                   </article>
                   {summary.length > 0 && <div className="log-context-summary">{summary.join(" · ")}</div>}
+                  <LearningLogDetails context={log.context ?? {}} />
                   <AgentLogDetails context={log.context ?? {}} />
                   <details className="log-context-details">
                       <summary>{Object.keys(log.context).length > 0 ? "Понятные параметры записи" : "Оригинальное техническое сообщение"}</summary>
@@ -1476,6 +1479,7 @@ function describeLog(log: LogEntry) {
     STOP_SLIPPAGE_RECORDED: { title: "Зафиксировано проскальзывание стопа", explanation: "Фактическая цена стоп-исполнения отличается от ожидаемой. Значение сохранено для анализа и обучения." },
     POST_MORTEM_CREATED: { title: "Создан разбор убыточной сделки", explanation: "Путь цены, MFE/MAE, исполнение и поведение стратегии сохранены для последующего анализа." },
     POST_MORTEM_FAILED: { title: "Разбор сделки не создан", explanation: "Закрытие позиции не отменяется: не удалось сохранить дополнительный аналитический разбор." },
+    LEARNING_APPLIED: { title: "Память проверена перед входом", explanation: "Ниже видно, какие прошлые результаты повлияли на допуск и риск кандидата. Это решение до остальных проверок, а не подтверждение открытия сделки." },
     LEARNING_UPDATED: { title: "Результат учтён в обучении", explanation: "Факт закрытой сделки добавлен в память стратегии; это не означает автоматического изменения правил без проверок." },
     AGENT_LEARNING_UPDATED: { title: "Аналитики обучились на результате", explanation: "Прогноз каждого основного и теневого аналитика сопоставлен с фактическим PnL. Рейтинги обновлены плавно; при достаточной выборке лучший претендент может заменить основного аналитика." },
   };
@@ -1483,6 +1487,16 @@ function describeLog(log: LogEntry) {
   if (item) return { event, title: item.title, explanation: `${item.explanation}${gate}${reason}` };
   if (event) return { event, title: "Системное торговое событие", explanation: `Бот сохранил структурированную запись для контроля и аудита.${gate}${reason}` };
   return { event: "", title: "Техническая запись системы", explanation: "Это служебное сообщение без торгового кода события. Оригинальный текст и поля доступны в деталях." };
+}
+
+function LearningLogDetails({ context: c }: { context: Record<string, unknown> }) {
+  if (c.event !== "LEARNING_APPLIED" && c.event !== "LEARNING_UPDATED") return null;
+  const evidence = Array.isArray(c.matched_rules) ? c.matched_rules : [];
+  return <div className="log-context-summary">
+    {c.event === "LEARNING_APPLIED" && <p><strong>{c.learning_action === "BLOCK" ? "Вход заблокирован" : c.learning_action === "REDUCE_RISK" ? "Риск снижен" : "Наблюдение, риск не изменён"}</strong> · риск {String(c.risk_before ?? "—")}% → {String(c.risk_after ?? "—")}%</p>}
+    {c.event === "LEARNING_UPDATED" && <p>Обновлено правил: {String(c.rules_updated ?? "не записано в старой версии")}. Результат: {c.outcome_r == null ? "R не рассчитан" : `${Number(c.outcome_r).toFixed(2)}R`}. 1R — исходный денежный риск всей позиции. Убыточный результат усиливает ограничения, прибыльный постепенно их ослабляет; нулевой не считается победой.</p>}
+    {evidence.map((raw, i) => { const rule = raw as Record<string, unknown>; return <p key={i}>Правило #{String(rule.rule_id ?? "—")} · {String(rule.scope)} · {translateFeature(String(rule.feature))}: {translateFeatureValue(String(rule.value))}. Наблюдений: {String(rule.observations)}, прибыльных: {String(rule.wins)}, убыточных: {String(rule.losses)}.</p>; })}
+  </div>;
 }
 
 function AgentLogDetails({ context }: { context: Record<string, unknown> }) {
@@ -1518,7 +1532,7 @@ function summarizeLogContext(context: Record<string, unknown>) {
 
 function logFieldLabel(key: string) {
   const labels: Record<string, string> = {
-    stage: "Этап", executed_at: "Время исполнения", fill_confirmed: "Исполнение подтверждено", mode: "Режим", event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", explanation: "Подробное объяснение", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок", evaluated_agents: "Оценено аналитиков"
+    risk_before: "Риск до памяти, %", risk_after: "Риск после памяти, %", risk_multiplier: "Множитель риска", outcome_r: "Результат в R", rules_updated: "Обновлено правил", penalty_delta: "Изменение штрафа до ограничений", learning_action: "Действие памяти", stage: "Этап", executed_at: "Время исполнения", fill_confirmed: "Исполнение подтверждено", mode: "Режим", event: "Код события", gate: "Проверка", symbol: "Пара", side: "Направление", signal: "Сигнал", lane: "Режим", score: "Оценка", rating: "Рейтинг", reason: "Причина", explanation: "Подробное объяснение", pnl: "PnL, USDT", position_id: "Позиция", order_id: "Ордер", order_status: "Статус ордера", execution_status: "Статус исполнения", requested_volume: "Запрошенный объём", filled_volume: "Исполненный объём", remaining_volume: "Остаток", entry_price: "Цена входа", exit_price: "Цена выхода", stop: "Stop Loss", take: "Take Profit", locked_stop: "Защитный SL", risk_percent: "Риск на сделку, %", daily_pnl: "PnL за день, USDT", daily_risk_limit: "Дневной лимит риска, USDT", reserved_stop_risk: "Риск открытых SL, USDT", candidate_stop_risk: "Риск новой сделки, USDT", exit_reason: "Причина выхода", exit_fee: "Комиссия выхода", partial_profit: "PnL части, USDT", previous_take: "Предыдущий TP", next_take: "Новый TP", extension_distance: "Шаг по ATR", win_rate: "Win Rate, %", total_profit: "Суммарный PnL, USDT", trades_checked: "Проверено сделок", evaluated_agents: "Оценено аналитиков"
   };
   return labels[key] ?? key.replace(/_/g, " ");
 }

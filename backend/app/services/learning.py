@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 from typing import Any
 
 from sqlalchemy import select
@@ -17,6 +18,7 @@ class LearningAssessment:
     penalty: float
     reason: str
     risk_multiplier: float = 1.0
+    matched_rules: list[dict] = field(default_factory=list)
 
 
 class LearningService:
@@ -91,10 +93,16 @@ class LearningService:
                     label = f"{rule.feature_key}={rule.feature_value}:{effective_penalty:.2f}"
                     matched.append((rule, effective_penalty, label))
         matched.sort(key=lambda item: item[1], reverse=True)
+        evidence = [{"rule_id": rule.id, "scope": rule.scope, "feature": rule.feature_key,
+                     "value": rule.feature_value, "effective_penalty": penalty,
+                     "observations": rule.observations, "wins": rule.wins, "losses": rule.losses}
+                    for rule, penalty, _ in matched[:4]]
+        def assessment(*args):
+            return LearningAssessment(*args, matched_rules=evidence)
         total_penalty = self.aggregate_penalty(matched)
         match_summary = ", ".join(label for _rule, _penalty, label in matched[:4])
         if self._has_block_evidence(matched):
-            return LearningAssessment(
+            return assessment(
                 False,
                 round(total_penalty, 2),
                 f"learning guard blocked repeated losing setup ({match_summary})",
@@ -102,23 +110,29 @@ class LearningService:
             )
         if total_penalty >= self.warn_threshold:
             risk_multiplier = self.risk_multiplier_for_penalty(total_penalty)
-            return LearningAssessment(
+            return assessment(
                 True,
                 round(total_penalty, 2),
                 f"learning guard reduced risk to {risk_multiplier:.2f}x after similar losses ({match_summary})",
                 risk_multiplier,
             )
         if total_penalty > 0:
-            return LearningAssessment(
+            return assessment(
                 True,
                 round(total_penalty, 2),
                 f"learning guard noted weak risk memory ({match_summary})",
                 1.0,
             )
-        return LearningAssessment(True, round(total_penalty, 2), "learning guard passed")
+        return assessment(True, round(total_penalty, 2), "learning guard passed")
 
-    async def record_closed_position(self, db: AsyncSession, position: Position, profit: float, reason: str) -> None:
-        context = position.entry_context or {}
+    async def record_closed_position(self, db: AsyncSession, position: Position, profit: float, reason: str) -> dict:
+        context = dict(position.entry_context or {})
+        if context.get("learning_update"):
+            return {**context["learning_update"], "applied": False}
+        execution = context.get("entry_execution") or {}
+        initial_budget = float(position.initial_risk or 0) * float(execution.get("volume") or 0)
+        outcome_r = profit / initial_budget if math.isfinite(initial_budget) and initial_budget > 0 else None
+        delta = self._penalty_delta(profit, outcome_r=outcome_r)
         side = str(context.get("side") or position.side)
         features = self._features_from_context(context)
         post_mortem = context.get("post_mortem") if isinstance(context.get("post_mortem"), dict) else {}
@@ -130,9 +144,18 @@ class LearningService:
             features.append(("strategy_followed", "yes" if post_mortem.get("strategy_followed") else "no"))
         if reason:
             features.append(("exit_reason", reason))
+        updates = []
         for scope in ("GLOBAL", position.symbol):
-            for feature_key, feature_value in features:
-                await self._upsert_rule(db, scope, side, feature_key, feature_value, profit, reason)
+            for feature_key, feature_value in dict.fromkeys(features):
+                updated = await self._upsert_rule(db, scope, side, feature_key, feature_value, profit, reason, outcome_r=outcome_r)
+                updates.append({"scope": scope, "feature": feature_key, "value": feature_value, **updated})
+        summary = {"applied": True, "learning_version": "risk_normalized_v1",
+                   "outcome_r": round(outcome_r, 4) if outcome_r is not None else None,
+                   "penalty_delta": round(delta, 4), "rules_updated": len(updates),
+                   "learning_basis": "INITIAL_RISK" if outcome_r is not None else "LEGACY_PNL",
+                   "rule_updates": updates, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        position.entry_context = {**context, "learning_update": summary}
+        return summary
 
     async def _rules_for(
         self,
@@ -168,9 +191,11 @@ class LearningService:
         feature_value: str,
         profit: float,
         reason: str,
-    ) -> None:
+        *, outcome_r: float | None = None,
+    ) -> dict:
         loss = profit < 0
-        penalty_delta = self._penalty_delta(profit)
+        win = profit > 0
+        penalty_delta = self._penalty_delta(profit, outcome_r=outcome_r)
         statement = insert(LearningRule).values(
             scope=scope,
             side=side,
@@ -178,7 +203,7 @@ class LearningService:
             feature_value=feature_value,
             penalty=max(penalty_delta, 0),
             observations=1,
-            wins=0 if loss else 1,
+            wins=1 if win else 0,
             losses=1 if loss else 0,
             total_profit=profit,
             last_reason=reason,
@@ -188,16 +213,27 @@ class LearningService:
             set_={
                 "penalty": func.greatest(0, func.least(self.max_penalty, LearningRule.penalty + penalty_delta)),
                 "observations": LearningRule.observations + 1,
-                "wins": LearningRule.wins + (0 if loss else 1),
+                "wins": LearningRule.wins + (1 if win else 0),
                 "losses": LearningRule.losses + (1 if loss else 0),
                 "total_profit": LearningRule.total_profit + profit,
                 "last_reason": reason,
                 "updated_at": func.now(),
             },
         )
-        await db.execute(statement)
+        result = await db.execute(statement.returning(LearningRule.id, LearningRule.penalty, LearningRule.observations))
+        row = result.one()
+        return {"rule_id": row.id, "penalty_after": round(float(row.penalty), 4), "observations": row.observations}
 
-    def _penalty_delta(self, profit: float) -> float:
+    def _penalty_delta(self, profit: float, *, outcome_r: float | None = None) -> float:
+        if not math.isfinite(profit):
+            raise ValueError("Learning requires finite realized PnL")
+        if profit == 0:
+            return 0.0
+        if outcome_r is not None and math.isfinite(outcome_r):
+            # Same risk-adjusted outcome has the same effect at every trade size.
+            if profit < 0:
+                return min(1.0, 0.35 + abs(outcome_r) * 0.65)
+            return -min(0.5, 0.15 + max(outcome_r, 0) * 0.175)
         if profit < 0:
             return min(1.0, 0.35 + abs(profit) / 25)
         return -min(0.5, 0.15 + profit / 50)

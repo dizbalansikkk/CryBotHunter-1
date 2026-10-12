@@ -189,3 +189,55 @@ def learning_rule(
         total_profit=-10.0,
         updated_at=updated_at,
     )
+
+
+
+def test_learning_normalizes_outcomes_by_initial_risk_and_zero_is_neutral():
+    service = LearningService()
+    assert service._penalty_delta(-0.25, outcome_r=-1) == service._penalty_delta(-25, outcome_r=-1)
+    assert service._penalty_delta(-0.25, outcome_r=-1) > service._penalty_delta(-0.025, outcome_r=-0.1)
+    assert service._penalty_delta(0, outcome_r=0) == 0
+    assert service._penalty_delta(0.5, outcome_r=2) < 0
+
+
+import pytest
+
+@pytest.mark.asyncio
+async def test_record_learning_uses_original_volume_and_does_not_learn_twice(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.models.entities import Position
+    service = LearningService()
+    position = Position(id=900, symbol="ETH/USDT", side="LONG", initial_risk=2, volume=0.1,
+        entry_context={"entry_execution": {"volume": 1.0}, "regime": "TRENDING_UP"})
+    update = AsyncMock(return_value={"rule_id": 7, "penalty_after": 1.0, "observations": 1})
+    monkeypatch.setattr(service, "_upsert_rule", update)
+    result = await service.record_closed_position(None, position, -2.0, "STOP_LOSS")
+    assert result["outcome_r"] == -1.0  # not -10R from the remaining volume
+    assert result["rules_updated"] == 4
+    assert result["penalty_delta"] == 1.0
+    assert all(call.kwargs["outcome_r"] == -1 for call in update.call_args_list)
+    again = await service.record_closed_position(None, position, -2.0, "STOP_LOSS")
+    assert again["applied"] is False
+    assert update.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_learning_audit_identifies_matched_rules(monkeypatch):
+    from unittest.mock import AsyncMock
+    service = LearningService()
+    rule = learning_rule("setup_signature", scope="BTC/USDT", observations=4, losses=4)
+    rule.id = 77
+    monkeypatch.setattr(service, "_rules_for", AsyncMock(side_effect=[[], [rule]]))
+    result = await service.assess_entry(None, coin(), "BUY")
+    assert result.matched_rules[0]["rule_id"] == 77
+    assert result.matched_rules[0]["losses"] == 4
+
+
+@pytest.mark.asyncio
+async def test_zero_profit_does_not_increment_wins():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(one=lambda: SimpleNamespace(id=1, penalty=0., observations=1))))
+    await LearningService()._upsert_rule(db, "GLOBAL", "LONG", "regime", "RANGING", 0., "BREAKEVEN_STOP", outcome_r=0.)
+    parameters = db.execute.call_args.args[0].compile().params
+    assert parameters["wins"] == 0 and parameters["losses"] == 0
