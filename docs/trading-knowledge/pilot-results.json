@@ -1,0 +1,421 @@
+{
+  "generated_at": "2026-10-12T16:38:34.090458+00:00",
+  "purpose": "fixed_parameter_pilot_not_strategy_approval",
+  "venue": "binance_usdm",
+  "market": "perpetual",
+  "timeframe": "1h",
+  "promotion_allowed": false,
+  "symbols": {
+    "BTCUSDT": {
+      "endpoint": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1h&limit=1500&endTime=1791823114090",
+      "data_sha256": "fca592462f994eab569b0a2b83fb995256377e69ed10726d7da3be9f97f06022",
+      "count": 1499,
+      "first_open_ms": 1786424400000,
+      "last_open_ms": 1791817200000,
+      "results": [
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 57,
+          "wins": 17,
+          "win_rate": 0.2982456140350877,
+          "net_r": -33.32960813719929,
+          "mean_r": -0.5847299673192857,
+          "profit_factor": 0.4252888465656439,
+          "max_closed_trade_drawdown_r": 36.287111294068424,
+          "skipped": {
+            "ambiguous_sweep": 1,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 23,
+          "wins": 5,
+          "win_rate": 0.21739130434782608,
+          "net_r": -19.403927353867633,
+          "mean_r": -0.8436490153855493,
+          "profit_factor": 0.25015082760700885,
+          "max_closed_trade_drawdown_r": 21.127795448155588,
+          "skipped": {
+            "ambiguous_sweep": 1,
+            "gap_invalid_stop": 0,
+            "trend_filter": 55
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 36,
+          "wins": 10,
+          "win_rate": 0.2777777777777778,
+          "net_r": -25.842698720811033,
+          "mean_r": -0.7178527422447509,
+          "profit_factor": 0.3423256714795109,
+          "max_closed_trade_drawdown_r": 26.709524660955285,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 8,
+          "wins": 1,
+          "win_rate": 0.125,
+          "net_r": -10.115331783042492,
+          "mean_r": -1.2644164728803116,
+          "profit_factor": 0.07354482080722782,
+          "max_closed_trade_drawdown_r": 10.115331783042492,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 44
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        }
+      ]
+    },
+    "ETHUSDT": {
+      "endpoint": "https://fapi.binance.com/fapi/v1/klines?symbol=ETHUSDT&interval=1h&limit=1500&endTime=1791823114090",
+      "data_sha256": "c2502ff59ef08ca332259836885dbfa87e9b4c889e10042119d5d0b49748bf54",
+      "count": 1499,
+      "first_open_ms": 1786424400000,
+      "last_open_ms": 1791817200000,
+      "results": [
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 60,
+          "wins": 20,
+          "win_rate": 0.3333333333333333,
+          "net_r": -23.42877368456928,
+          "mean_r": -0.390479561409488,
+          "profit_factor": 0.5731425395138484,
+          "max_closed_trade_drawdown_r": 29.047412462051042,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 24,
+          "wins": 10,
+          "win_rate": 0.4166666666666667,
+          "net_r": -4.294383290955429,
+          "mean_r": -0.1789326371231429,
+          "profit_factor": 0.7817693826563223,
+          "max_closed_trade_drawdown_r": 9.231321453388833,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 60
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 47,
+          "wins": 13,
+          "win_rate": 0.2765957446808511,
+          "net_r": -32.88662303782089,
+          "mean_r": -0.6997153837834232,
+          "profit_factor": 0.3491096313375076,
+          "max_closed_trade_drawdown_r": 34.272967840777866,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 16,
+          "wins": 6,
+          "win_rate": 0.375,
+          "net_r": -6.756666177506643,
+          "mean_r": -0.4222916360941652,
+          "profit_factor": 0.5558993614451748,
+          "max_closed_trade_drawdown_r": 9.34387860694444,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 54
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        }
+      ]
+    },
+    "SOLUSDT": {
+      "endpoint": "https://fapi.binance.com/fapi/v1/klines?symbol=SOLUSDT&interval=1h&limit=1500&endTime=1791823114090",
+      "data_sha256": "53f996b5a30eb77f5721acd033091c69889d26c3eb5861b8c0b0d022c33bfb02",
+      "count": 1499,
+      "first_open_ms": 1786424400000,
+      "last_open_ms": 1791817200000,
+      "results": [
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 60,
+          "wins": 15,
+          "win_rate": 0.25,
+          "net_r": -32.11294985250051,
+          "mean_r": -0.5352158308750086,
+          "profit_factor": 0.4393935369732957,
+          "max_closed_trade_drawdown_r": 32.11294985250051,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 100,
+          "end_index": 899,
+          "trades_count": 20,
+          "wins": 6,
+          "win_rate": 0.3,
+          "net_r": -6.6502161098959345,
+          "mean_r": -0.3325108054947967,
+          "profit_factor": 0.6010694689143103,
+          "max_closed_trade_drawdown_r": 8.931689255994549,
+          "skipped": {
+            "ambiguous_sweep": 2,
+            "gap_invalid_stop": 0,
+            "trend_filter": 61
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "train"
+        },
+        {
+          "hypothesis": "H02",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 43,
+          "wins": 16,
+          "win_rate": 0.37209302325581395,
+          "net_r": -11.190140146363424,
+          "mean_r": -0.26023581735728896,
+          "profit_factor": 0.6950183244723674,
+          "max_closed_trade_drawdown_r": 13.451223002183639,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 0
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        },
+        {
+          "hypothesis": "H02_WITH_H01",
+          "parameters": {
+            "fee_rate": 0.0006,
+            "slippage_bps": 5.0,
+            "stop_buffer_bps": 5.0,
+            "reward_r": 2.0,
+            "max_holding_bars": 24
+          },
+          "start_index": 899,
+          "end_index": 1499,
+          "trades_count": 14,
+          "wins": 4,
+          "win_rate": 0.2857142857142857,
+          "net_r": -6.698341053568534,
+          "mean_r": -0.4784529323977524,
+          "profit_factor": 0.5048112616341892,
+          "max_closed_trade_drawdown_r": 8.99378898208856,
+          "skipped": {
+            "ambiguous_sweep": 0,
+            "gap_invalid_stop": 0,
+            "trend_filter": 43
+          },
+          "promotion_allowed": false,
+          "limitations": [
+            "funding_not_modelled",
+            "fixed_exits_not_production_lifecycle",
+            "no_orderbook_or_liquidation_simulation",
+            "no_intrabar_equity_drawdown"
+          ],
+          "slice": "holdout"
+        }
+      ]
+    }
+  }
+}

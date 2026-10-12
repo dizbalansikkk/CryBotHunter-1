@@ -1,0 +1,772 @@
+{
+  "schema_version": 1,
+  "archive_name": "обучение.zip",
+  "archive_sha256": "ee043a860fac88d5dcc1886a8c73f053ebdcd625bf63145ea24a898760a79701",
+  "review_complete": false,
+  "note": "Extraction is not review. Page numbers are 1-based PDF pages. Duplicate content is counted once.",
+  "sources": [
+    {
+      "id": "1",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_1.pdf",
+      "sha256": "21d7c03a9b1e74ceb5625c42a38bb5d3bc91b79721e954bc1d6e83432d8df586",
+      "pages": 18,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "2",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_2.pdf",
+      "sha256": "cd64e74c131ac1cab741decee6f827d62db6ca0d7512d7258ab5eaeacf8edb69",
+      "pages": 9,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "4",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_4.pdf",
+      "sha256": "9213da5f963b9e95ef0893d8ef499576eda1e2cc2f27de398d1d93d82b9bca2b",
+      "pages": 63,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        24
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "7",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_7.pdf",
+      "sha256": "a21771b5c2c2e1d6fc1040873952c0e6d2b71ed17804b068ddcd0bcb61385018",
+      "pages": 35,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        18,
+        22,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "89",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_89.pdf",
+      "sha256": "d07f1b562d73f5be544063e86329b70f24246b18caeb11111bff4c9f8ac3674b",
+      "pages": 311,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        1,
+        76,
+        77,
+        78,
+        304,
+        305
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "90",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_90.pdf",
+      "sha256": "4b4e547f78689cf9d0743d36bb70dd0776dde1a6fd0c2b104b333958a06c8328",
+      "pages": 127,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        1
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "10",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_10.pdf",
+      "sha256": "14f71f475513dd60a80968aa900d7580373965a79b1d56bad6f20a80a88c285e",
+      "pages": 17,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "sparse_text_pages": [
+        6,
+        9,
+        13,
+        15
+      ],
+      "status": "reviewed"
+    },
+    {
+      "id": "13",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_13.pdf",
+      "sha256": "c4e78251ab71b96c6266de78f1d3d7b35aba88d2608415fbbf0d894fb56147b1",
+      "pages": 18,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "sparse_text_pages": [
+        11
+      ],
+      "status": "reviewed"
+    },
+    {
+      "id": "16",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_16.pdf",
+      "sha256": "aaedb343849c0963edf6724bb11c9ed40fa88ab003eae5ff5f51f8f1e8388df5",
+      "pages": 14,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        3,
+        4,
+        9,
+        10
+      ],
+      "status": "visual_review_pending"
+    },
+    {
+      "id": "18",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_18.pdf",
+      "sha256": "dbfa1a3a77522ecbccb314b5d8db63f53f747635703a058d465e7cfd4f27216f",
+      "pages": 31,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "21",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_21.pdf",
+      "sha256": "0c5355893fc8aaec182665c618302d6357cdc0832da1dc3e54fce815dc4a0dc3",
+      "pages": 16,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        4,
+        10,
+        11,
+        12,
+        13,
+        14,
+        16
+      ],
+      "status": "visual_review_pending"
+    },
+    {
+      "id": "24",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_24.pdf",
+      "sha256": "b58b31db89fe0059096df56bcd3a8dc916d570009a589cc4fce63e514a0d353a",
+      "pages": 18,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        6,
+        8,
+        10
+      ],
+      "status": "visual_review_pending"
+    },
+    {
+      "id": "26",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_26.pdf",
+      "sha256": "d14fc7482d41baff9af37e3841af2b6a9871986c18044446ac0037f54e148ecd",
+      "pages": 26,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        7,
+        11,
+        12,
+        21,
+        22
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "29",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_29.pdf",
+      "sha256": "753a141ce929b34d68114e7464dec819f23708f4502ec27347ca77de77e2d2dd",
+      "pages": 11,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "32",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_32.pdf",
+      "sha256": "f91300e9768d0135632a39d31348339803164239da69546a0bd789ff75d3ab1c",
+      "pages": 17,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "sparse_text_pages": [
+        17
+      ],
+      "status": "reviewed"
+    },
+    {
+      "id": "34",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_34.pdf",
+      "sha256": "a6abda0b44fb19641321e4c876be280186aabc7e4aede8c688a0e345462bf7e9",
+      "pages": 29,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        15,
+        25,
+        26
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "37",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_37.pdf",
+      "sha256": "28d94a2f50b1bc3aa61014507b2f50f302d00119916dfc4db04bcf4122ed0dca",
+      "pages": 25,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "41",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_41.pdf",
+      "sha256": "37f4cee783f05118e8f7d821f0c18a51852ce7884a71270fdc301fb9f1f2d6d1",
+      "pages": 52,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        10,
+        11,
+        14,
+        15,
+        16,
+        19,
+        21,
+        22,
+        24,
+        26,
+        27,
+        28,
+        31,
+        34,
+        37,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        47,
+        51
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "44",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_44.pdf",
+      "sha256": "a904771eafae7d5d0062688435bd9167b0ee989d910af53fe5bb09d3f6f91da1",
+      "pages": 19,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        12,
+        17,
+        18
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "47",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_47.pdf",
+      "sha256": "8ccce30f01f1b44e61e260dde67a0ba05be58cd5f3bf551be5fc32bbbce529e4",
+      "pages": 17,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "48",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_48.pdf",
+      "sha256": "412039cbaaeb04df9c2f4e8e5b55e58a71b0178caf069c59005d2814ca043f15",
+      "pages": 3,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "49",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_49.pdf",
+      "sha256": "c970844dd3125b195b61dac32a5db11bef5fa44af5ee34cd2ac40914f8a6ad6d",
+      "pages": 23,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "51",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_51.pdf",
+      "sha256": "766a4991caa428bb644bbc9e80f3aa0c004dd782737d145d9e950dd890034215",
+      "pages": 23,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "54",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_54.pdf",
+      "sha256": "8b34c944420ea1364a735a42d95a2b245e0141ef18c7e7c1b6f708423bbbb192",
+      "pages": 12,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "55",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_55.pdf",
+      "sha256": "793655519b102f7d7e1c001e8807d5d1e16530c661a2c949222b022e1f1e506b",
+      "pages": 9,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "56",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_56.pdf",
+      "sha256": "d2f43022bbdb9df1d26666797b0b5241008f4857d203da8a7c3c6e6e45956ca2",
+      "pages": 13,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "59",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_59.pdf",
+      "sha256": "0fcae07f6440f74d5637ce6a0bf854fc97a716c492eeea56b54a0fda3ccabaae",
+      "pages": 24,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "61",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_61.pdf",
+      "sha256": "0530c43e94f2c8f9332eee1a47f77a2b44c468e03f782a40f84db4f4bf8ef5b8",
+      "pages": 47,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "63",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_63.pdf",
+      "sha256": "87f23db28d2845a289ccae8d61ba9cad97f47fb3bd1374960f0ec2d59ad1a1dd",
+      "pages": 17,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "65",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_65.pdf",
+      "sha256": "5f8888867449d9eb076035c8af614253420cf76b95d4ec350607c2619d732217",
+      "pages": 12,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "sparse_text_pages": [],
+      "status": "reviewed"
+    },
+    {
+      "id": "67",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_67.pdf",
+      "sha256": "3af3fce855e03ce6fcec22d75d8c44d4d77129facf90cca928c1228a6299c594",
+      "pages": 25,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        14,
+        15
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "69",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_69.pdf",
+      "sha256": "57ab744901f8281b3abfeb48b3cdd13ee70dd6cb49e8b3cc071a4c5b92170caa",
+      "pages": 12,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        3,
+        6,
+        7,
+        10
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "70",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_70.pdf",
+      "sha256": "b57346bd96d965d34aba46458a57ec08de06e005a197d2e2587f27975e924f36",
+      "pages": 16,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        5,
+        16
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "73",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_73.pdf",
+      "sha256": "94e681a6fa7d28ae86fd39952393094edab154b0f54e8a8f00dc5e092d229adc",
+      "pages": 15,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "75",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_75.pdf",
+      "sha256": "de745b9dd19c7d0e1125a1c2fea8464f875c05c384b11ef26598ce07d2a4de53",
+      "pages": 60,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        24,
+        35,
+        41,
+        48,
+        54
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "76",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_76.pdf",
+      "sha256": "431ab2c0793d8aff73c1f2fb053f1799e37474b2c47e19c02acd323ce528f828",
+      "pages": 18,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        6
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "79",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_79.pdf",
+      "sha256": "aca1a3078ab7185df87c928e3385227a2fd5921e6bc23571931a8bf48f1e45d6",
+      "pages": 20,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "83",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_83.pdf",
+      "sha256": "543948a1151699bc1c365073ea842430c2e1aa26816a51cc2c712522021709de",
+      "pages": 20,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [],
+      "status": "pending"
+    },
+    {
+      "id": "85",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_85.pdf",
+      "sha256": "7ebaaa80ac803edf03dfcf2cf3450b09fe730e7efe6636af08d147151cfcd718",
+      "pages": 23,
+      "duplicate_of": null,
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        4,
+        19
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "87",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_87.pdf",
+      "sha256": "8bc4f9b931deb4162410e66ffecd5d837d5e2208996e87de703b70afa71532d4",
+      "pages": 5,
+      "duplicate_of": null,
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "sparse_text_pages": [],
+      "status": "reviewed"
+    },
+    {
+      "id": "70(1)",
+      "file": "cryptology-school-12-0-obuchenie-treydingu-onlayn-base-advanced-pro-2024_70 (1).pdf",
+      "sha256": "b57346bd96d965d34aba46458a57ec08de06e005a197d2e2587f27975e924f36",
+      "pages": 16,
+      "duplicate_of": "70",
+      "text_reviewed_pages": [],
+      "visual_reviewed_pages": [],
+      "sparse_text_pages": [
+        5,
+        16
+      ],
+      "status": "duplicate"
+    }
+  ]
+}
