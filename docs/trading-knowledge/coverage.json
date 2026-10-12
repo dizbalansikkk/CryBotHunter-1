@@ -220,14 +220,29 @@
         13,
         14
       ],
-      "visual_reviewed_pages": [],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
       "sparse_text_pages": [
         3,
         4,
         9,
         10
       ],
-      "status": "visual_review_pending"
+      "status": "reviewed"
     },
     {
       "id": "18",
@@ -264,7 +279,24 @@
         15,
         16
       ],
-      "visual_reviewed_pages": [],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
       "sparse_text_pages": [
         4,
         10,
@@ -274,7 +306,7 @@
         14,
         16
       ],
-      "status": "visual_review_pending"
+      "status": "reviewed"
     },
     {
       "id": "24",
@@ -302,13 +334,32 @@
         17,
         18
       ],
-      "visual_reviewed_pages": [],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
       "sparse_text_pages": [
         6,
         8,
         10
       ],
-      "status": "visual_review_pending"
+      "status": "reviewed"
     },
     {
       "id": "26",
@@ -316,8 +367,62 @@
       "sha256": "d14fc7482d41baff9af37e3841af2b6a9871986c18044446ac0037f54e148ecd",
       "pages": 26,
       "duplicate_of": null,
-      "text_reviewed_pages": [],
-      "visual_reviewed_pages": [],
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
+      "visual_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
       "sparse_text_pages": [
         7,
         11,
@@ -325,7 +430,7 @@
         21,
         22
       ],
-      "status": "pending"
+      "status": "reviewed"
     },
     {
       "id": "29",
@@ -408,10 +513,36 @@
       "sha256": "28d94a2f50b1bc3aa61014507b2f50f302d00119916dfc4db04bcf4122ed0dca",
       "pages": 25,
       "duplicate_of": null,
-      "text_reviewed_pages": [],
+      "text_reviewed_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25
+      ],
       "visual_reviewed_pages": [],
       "sparse_text_pages": [],
-      "status": "pending"
+      "status": "visual_review_pending"
     },
     {
       "id": "41",
