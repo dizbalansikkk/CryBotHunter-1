@@ -149,17 +149,21 @@ class MarketScanner:
         candles["ema50"] = close.ewm(span=50).mean()
         candles["ema200"] = close.ewm(span=200).mean()
         delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = -delta.clip(upper=0).rolling(14).mean()
-        rs = gain / loss.replace(0, pd.NA)
-        candles["rsi"] = 100 - (100 / (1 + rs))
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+        loss = -delta.clip(upper=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+        rs = gain / loss.replace(0, float("nan"))
+        # Match ContextManager's production Wilder smoothing, including flat
+        # and one-sided markets. NaN here used to drop valid backtest bars.
+        rsi = 100 - (100 / (1 + rs))
+        rsi = rsi.mask((loss == 0) & (gain > 0), 100.0)
+        candles["rsi"] = rsi.mask((loss == 0) & (gain == 0), 50.0)
         ema12 = close.ewm(span=12).mean()
         ema26 = close.ewm(span=26).mean()
         candles["macd"] = ema12 - ema26
         high_low = candles["high"] - candles["low"]
         high_close = (candles["high"] - close.shift()).abs()
         low_close = (candles["low"] - close.shift()).abs()
-        candles["atr"] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1).rolling(14).mean()
+        candles["atr"] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
         return candles
 
     def _synthetic_row(self, symbol: str) -> dict[str, float | str]:
