@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from dataclasses import replace
 
 import pytest
 
@@ -71,6 +72,35 @@ def test_pretrade_quality_blocks_weak_walk_forward():
     assert "pre-trade quality blocked" in decision.reason
     assert decision.profitable_windows_percent == 0
     assert decision.risk_multiplier == 0.0
+
+
+def test_quality_is_independent_of_candidate_risk_percent():
+    gate = PreTradeQualityGate()
+    history = report(windows=[window(test_profit=-0.5), window(index=1, test_profit=0.1)])
+    decisions = [gate._decision(history, 500, replace(risk_settings(), risk_percent=r)) for r in (0.01, 1, 2)]
+    assert all(not d.allowed for d in decisions)
+    assert len({d.reason for d in decisions}) == 1
+    assert "R (" in decisions[0].reason
+
+
+def test_empty_windows_do_not_count_as_losing_evidence():
+    gate = PreTradeQualityGate()
+    history = report(windows=[window()] + [window(index=i, test_profit=0, test_trades_count=0,
+        test_win_rate=0, test_profit_factor=0) for i in range(1, 10)],
+        average_win_rate=5.5, average_profit_factor=0.15)
+    decision = gate._decision(history, 2160, risk_settings())
+    assert decision.allowed
+    assert decision.profitable_windows_percent == 100
+    assert decision.window_count == 1
+
+
+def test_missing_windows_and_nonfinite_metrics_fail_closed():
+    gate = PreTradeQualityGate()
+    gate.settings = gate.settings.model_copy(update={"pretrade_quality_require_history": True})
+    for history in (report(windows=[]), report(total_profit=float("nan"))):
+        decision = gate._decision(history, 500, risk_settings())
+        assert not decision.allowed
+        assert decision.risk_multiplier == 0
 
 
 def test_pretrade_quality_reduces_risk_for_borderline_walk_forward():

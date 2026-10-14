@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,8 @@ class PreTradeQualityAssessment:
 
 
 class PreTradeQualityGate:
+    BACKTEST_RISK_USDT = 10.0
+
     def __init__(self, backtester: BacktestingService | None = None) -> None:
         self.settings = get_settings()
         self.backtester = backtester or BacktestingService()
@@ -71,7 +74,7 @@ class PreTradeQualityGate:
             self.backtester.walk_forward, candles, train_size=train_size,
             test_size=test_size, step_size=step_size, direction=direction,
             learning_probe=learning_probe,
-            parameters={"risk_per_trade": 10.0,
+            parameters={"risk_per_trade": self.BACKTEST_RISK_USDT,
                 "stop_loss_percent": risk_settings.stop_loss_percent,
                 "take_profit_percent": risk_settings.take_profit_percent,
                 "trailing_stop_percent": risk_settings.trailing_stop_percent,
@@ -102,12 +105,24 @@ class PreTradeQualityGate:
         *,
         learning_probe: bool = False,
     ) -> PreTradeQualityAssessment:
+        # Empty windows carry no evidence about win rate or profitability.
+        # Counting them as losses systematically rejects sparse directional lanes.
+        active = [w for w in report.windows if w.test_trades_count > 0]
+        if active and len(active) != len(report.windows):
+            count = sum(w.test_trades_count for w in active)
+            report = replace(report, windows=active, window_count=len(active),
+                profitable_windows=sum(w.test_profit > 0 for w in active),
+                average_win_rate=sum(w.test_win_rate * w.test_trades_count for w in active) / count,
+                average_profit_factor=sum(w.test_profit_factor for w in active) / len(active))
+        metrics = (report.total_profit, report.average_win_rate, report.average_profit_factor)
+        if not all(math.isfinite(v) for v in metrics):
+            return PreTradeQualityAssessment(False, "pre-trade quality blocked: invalid historical metrics", candles_checked, risk_multiplier=0.0)
         if report.window_count <= 0:
             return PreTradeQualityAssessment(
-                True,
-                "pre-trade quality warning: not enough walk-forward windows",
+                not self.settings.pretrade_quality_require_history,
+                "pre-trade quality blocked: not enough walk-forward windows" if self.settings.pretrade_quality_require_history else "pre-trade quality warning: not enough walk-forward windows",
                 candles_checked,
-                risk_multiplier=self.settings.pretrade_quality_min_risk_multiplier,
+                risk_multiplier=0.0 if self.settings.pretrade_quality_require_history else self.settings.pretrade_quality_min_risk_multiplier,
             )
 
         total_test_trades = sum(window.test_trades_count for window in report.windows)
@@ -120,7 +135,7 @@ class PreTradeQualityGate:
             return PreTradeQualityAssessment(
                 allowed=True,
                 reason=(
-                    "paper learning quality is inconclusive: strict strategy produced "
+                    "paper learning quality is inconclusive: comparable strategy produced "
                     f"{total_test_trades} comparable trades; risk reduced to "
                     f"{self.settings.pretrade_quality_min_risk_multiplier:.2f}x"
                 ),
@@ -165,8 +180,11 @@ class PreTradeQualityGate:
                 f"profitable windows {profitable_windows_percent:.2f}% < "
                 f"{self.settings.pretrade_quality_min_profitable_windows_percent:.2f}%"
             )
-        if report.total_profit <= -risk_settings.risk_percent:
-            hard_reasons.append(f"walk-forward total profit {report.total_profit:.2f} is below risk tolerance")
+        # The simulation risks a fixed USDT amount. The candidate's risk_percent
+        # is a sizing decision, not a comparable monetary loss threshold.
+        net_r = report.total_profit / self.BACKTEST_RISK_USDT
+        if net_r < 0:
+            hard_reasons.append(f"walk-forward net result {net_r:.2f} R ({report.total_profit:.2f} USDT at {self.BACKTEST_RISK_USDT:.2f} USDT risk) is negative")
 
         allowed = not hard_reasons
         risk_multiplier = 0.0 if hard_reasons else self._risk_multiplier(
