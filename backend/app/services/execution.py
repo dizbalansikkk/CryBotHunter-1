@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.entities import Order, OrderStatus
-from app.services.exchange import ExchangeClient, PreparedOrder
+from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumError
 
 
 class ExitSizeAssessment:
@@ -47,6 +47,8 @@ class ExecutionService:
         amount: float,
         reference_price: float,
         reason: str,
+        *,
+        paper_learning: bool = False,
     ) -> Order:
         order = Order(
             symbol=symbol,
@@ -95,7 +97,20 @@ class ExecutionService:
                 )
                 order.raw = {**order.raw, "paper_exit_exact_inventory": True}
             else:
-                prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
+                try:
+                    prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
+                except OrderMinimumError as exc:
+                    if not (paper_learning and reason == "ENTRY" and self.settings.paper_trading
+                            and self.settings.paper_exploration_enabled and not self.settings.live_trading_enabled):
+                        raise
+                    if not all(math.isfinite(value) and value > 0 for value in (amount, reference_price)):
+                        raise ValueError("Virtual learning entry requires a positive finite amount and price") from exc
+                    # Keep the requested risk, rather than rounding the position
+                    # UP to the venue minimum. This sample is explicitly virtual.
+                    prepared_order = PreparedOrder(amount=amount, fee_rate=self.settings.paper_fee_rate,
+                        min_amount=None, min_cost=None, metadata_available=False)
+                    order.raw = {**order.raw, "paper_learning_subminimum": True,
+                        "venue_executable": False, "venue_minimum_reason": str(exc)}
             order.requested_amount = prepared_order.amount
             order.raw = {
                 **(order.raw or {}),

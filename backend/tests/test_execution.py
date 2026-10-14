@@ -1,7 +1,7 @@
 import pytest
 
 from app.services.execution import ExecutionService
-from app.services.exchange import ExchangeClient, PreparedOrder
+from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumError
 
 
 class Db:
@@ -37,6 +37,49 @@ class LowBalanceExchange:
 
     async def create_order(self, *args, **kwargs):
         raise AssertionError("create_order should not be called when balance is insufficient")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paper,enabled,live,probe,expected", [
+    (True, True, False, True, "FILLED"),
+    (True, True, False, False, "FAILED"),
+    (False, True, True, True, "FAILED"),
+    (True, True, True, True, "FAILED"),
+    (True, False, False, True, "FAILED"),
+])
+async def test_subminimum_learning_fill_never_increases_risk_or_reaches_live(monkeypatch, paper, enabled, live, probe, expected):
+    class MinimumExchange(LowBalanceExchange):
+        def is_derivatives_market(self):
+            return True
+        async def prepare_order(self, symbol, amount, reference_price):
+            raise OrderMinimumError("notional below venue minimum 20 USDT")
+    service = ExecutionService(MinimumExchange())
+    for key, value in {"paper_trading": paper, "paper_exploration_enabled": enabled, "live_trading_enabled": live}.items():
+        monkeypatch.setattr(service.settings, key, value)
+    order = await service.execute_market(Db(), "LINK/USDT", "sell", 0.12, 12.5, "ENTRY", paper_learning=probe)
+    assert order.status == expected
+    if expected == "FILLED":
+        assert order.filled_amount == 0.12
+        assert order.raw["paper_learning_subminimum"]
+        assert order.raw["venue_executable"] is False
+        assert order.fee > 0
+        assert order.average_price < 12.5
+
+
+@pytest.mark.asyncio
+async def test_learning_does_not_hide_metadata_failure(monkeypatch):
+    class BrokenExchange(LowBalanceExchange):
+        def is_derivatives_market(self):
+            return True
+        async def prepare_order(self, *args):
+            raise RuntimeError("metadata unavailable")
+    service = ExecutionService(BrokenExchange())
+    monkeypatch.setattr(service.settings, "paper_trading", True)
+    monkeypatch.setattr(service.settings, "paper_exploration_enabled", True)
+    monkeypatch.setattr(service.settings, "live_trading_enabled", False)
+    order = await service.execute_market(Db(), "LINK/USDT", "sell", 0.12, 12.5, "ENTRY", paper_learning=True)
+    assert order.status == "FAILED"
+    assert order.raw["message"] == "metadata unavailable"
 
 
 @pytest.mark.asyncio

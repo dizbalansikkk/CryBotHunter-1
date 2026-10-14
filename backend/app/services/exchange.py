@@ -50,6 +50,10 @@ class PreparedOrder:
     metadata_available: bool
 
 
+class OrderMinimumError(RuntimeError):
+    """Valid venue metadata rejected the order's size or notional."""
+
+
 class ExchangeClient:
     _NATIVE_PROTECTIVE_STOP_EXCHANGES = {"binance", "okx", "bybit"}
     _DERIVATIVE_MARKET_TYPES = {"future", "futures", "swap"}
@@ -423,7 +427,7 @@ class ExchangeClient:
         except (ccxt.BaseError, ValueError, TypeError):
             normalized = round(float(amount), 8)
         if normalized <= 0:
-            raise RuntimeError(f"Order amount for {symbol} is too small after exchange precision rounding.")
+            raise OrderMinimumError(f"Order amount for {symbol} is too small after exchange precision rounding.")
         return normalized
 
     def _validate_minimums(
@@ -435,10 +439,10 @@ class ExchangeClient:
         min_cost: float | None,
     ) -> None:
         if min_amount is not None and amount < min_amount:
-            raise RuntimeError(f"Order amount for {symbol} is below exchange minimum: {amount} < {min_amount}.")
+            raise OrderMinimumError(f"Order amount for {symbol} is below exchange minimum: {amount} < {min_amount}.")
         notional = abs(amount * reference_price)
         if min_cost is not None and notional < min_cost:
-            raise RuntimeError(f"Order notional for {symbol} is below exchange minimum: {notional:.8f} < {min_cost}.")
+            raise OrderMinimumError(f"Order notional for {symbol} is below exchange minimum: {notional:.8f} < {min_cost}.")
 
     def _nested_float(self, payload: dict[str, Any], *keys: str) -> float | None:
         value: Any = payload

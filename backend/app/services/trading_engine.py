@@ -461,6 +461,8 @@ class TradingEngine:
                         if isinstance(position.entry_context, dict)
                         else {}
                     )
+                    if entry_execution.get("paper_learning_subminimum"):
+                        reason += "; virtual learning fill below venue minimum (not executable on exchange)"
                     self._log_trading_event(
                         db,
                         "INFO",
@@ -1036,6 +1038,7 @@ class TradingEngine:
             volume,
             coin.price,
             "ENTRY",
+            paper_learning=paper_exploration,
         )
         if entry_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not entry_order.average_price:
             return None
@@ -1073,6 +1076,8 @@ class TradingEngine:
             "average_price": round(float(entry_price), 8),
             "status": entry_order.status,
             "venue_setup": (entry_order.raw or {}).get("venue_setup", {}),
+            "paper_learning_subminimum": bool((entry_order.raw or {}).get("paper_learning_subminimum")),
+            "venue_minimum_reason": (entry_order.raw or {}).get("venue_minimum_reason"),
         }
         if paper_exploration:
             bullish_votes, bearish_votes = self._paper_exploration_votes(coin)
