@@ -144,6 +144,7 @@ def test_pretrade_quality_blocks_profitable_but_insufficient_sample():
 
 def test_paper_learning_probe_can_collect_unknown_setup_at_minimum_risk():
     gate = PreTradeQualityGate()
+    gate.settings = gate.settings.model_copy(update={"paper_trading": True, "paper_exploration_enabled": True, "live_trading_enabled": False})
     unknown_report = report(
         windows=[window(test_profit=0.0, test_win_rate=0.0, test_profit_factor=0.0, test_trades_count=0)],
         profitable_windows=0,
@@ -166,6 +167,7 @@ def test_paper_learning_probe_can_collect_unknown_setup_at_minimum_risk():
 
 def test_paper_learning_probe_still_blocks_negative_sparse_history():
     gate = PreTradeQualityGate()
+    gate.settings = gate.settings.model_copy(update={"paper_exploration_enabled": False})
     losing_report = report(
         windows=[window(test_profit=-2.0, test_win_rate=0.0, test_profit_factor=0.0, test_trades_count=1)],
         profitable_windows=0,
@@ -183,6 +185,40 @@ def test_paper_learning_probe_still_blocks_negative_sparse_history():
 
     assert decision.allowed is False
     assert decision.risk_multiplier == 0.0
+
+
+@pytest.mark.parametrize("paper,exploration,live,probe,allowed", [
+    (True, True, False, True, True),
+    (True, True, False, False, False),
+    (False, True, False, True, False),
+    (True, False, False, True, False),
+    (True, True, True, True, False),
+    (False, True, True, True, False),
+])
+def test_negative_history_forward_learning_is_isolated_to_virtual_lane(paper, exploration, live, probe, allowed):
+    gate = PreTradeQualityGate()
+    gate.settings = gate.settings.model_copy(update={"paper_trading": paper,
+        "paper_exploration_enabled": exploration, "live_trading_enabled": live})
+    decision = gate._decision(report(windows=[window(test_profit=-20)]), 2160, risk_settings(), learning_probe=probe)
+    assert decision.allowed is allowed
+    assert decision.total_profit == -20
+    if allowed:
+        assert 0 < decision.risk_multiplier <= 0.35
+        assert "paper learning only" in decision.reason
+        assert "historical quality failed" in decision.reason
+        assert "negative" in decision.reason
+    else:
+        assert decision.risk_multiplier == 0
+
+
+@pytest.mark.parametrize("history", [report(windows=[]), report(total_profit=float("nan")), report(average_profit_factor=float("inf"))])
+def test_virtual_exploration_does_not_override_missing_or_invalid_history(history):
+    gate = PreTradeQualityGate()
+    gate.settings = gate.settings.model_copy(update={"paper_trading": True,
+        "paper_exploration_enabled": True, "live_trading_enabled": False, "pretrade_quality_require_history": True})
+    decision = gate._decision(history, 500, risk_settings(), learning_probe=True)
+    assert not decision.allowed
+    assert decision.risk_multiplier == 0
 
 
 @pytest.mark.asyncio

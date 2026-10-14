@@ -127,8 +127,17 @@ class PreTradeQualityGate:
 
         total_test_trades = sum(window.test_trades_count for window in report.windows)
         profitable_windows_percent = report.profitable_windows / report.window_count * 100
-        if (
+        # Virtual forward exploration must be explicitly enabled. A caller's
+        # lane flag alone must never relax admission for real capital.
+        paper_learning = (
             learning_probe
+            and self.settings.paper_trading
+            and self.settings.paper_exploration_enabled
+            and not self.settings.live_trading_enabled
+        )
+        learning_risk = min(0.35, self.settings.pretrade_quality_min_risk_multiplier)
+        if (
+            paper_learning
             and total_test_trades < self.settings.pretrade_quality_min_trades
             and report.total_profit >= 0
         ):
@@ -137,10 +146,10 @@ class PreTradeQualityGate:
                 reason=(
                     "paper learning quality is inconclusive: comparable strategy produced "
                     f"{total_test_trades} comparable trades; risk reduced to "
-                    f"{self.settings.pretrade_quality_min_risk_multiplier:.2f}x"
+                    f"{learning_risk:.2f}x"
                 ),
                 candles_checked=candles_checked,
-                risk_multiplier=self.settings.pretrade_quality_min_risk_multiplier,
+                risk_multiplier=learning_risk,
                 window_count=report.window_count,
                 profitable_windows_percent=round(profitable_windows_percent, 2),
                 average_win_rate=report.average_win_rate,
@@ -199,6 +208,13 @@ class PreTradeQualityGate:
             reason = f"pre-trade quality reduced risk to {risk_multiplier:.2f}x: {'; '.join(soft_reasons)}"
         else:
             reason = "pre-trade quality passed"
+        if hard_reasons and paper_learning:
+            allowed = True
+            risk_multiplier = learning_risk
+            reason = (
+                f"paper learning only: historical quality failed; virtual risk reduced to {learning_risk:.2f}x; "
+                + "; ".join(hard_reasons)
+            )
         return PreTradeQualityAssessment(
             allowed=allowed,
             reason=reason,
