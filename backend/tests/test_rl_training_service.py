@@ -211,6 +211,9 @@ async def test_shadow_promotion_requires_both_backtest_and_forward_evidence(monk
 
     monkeypatch.setattr(service, "shadow_for", shadow_for)
     monkeypatch.setattr(service.shadow_trading, "report", report)
+    async def no_incumbent(*args):
+        return None
+    monkeypatch.setattr(service, "active_for", no_incumbent)
 
     state = await service.evaluate_shadow_promotion(Db(), "BTC/USDT", "1h")
 
@@ -257,3 +260,27 @@ async def test_excluded_symbol_cleanup_retires_models_and_closes_virtual_positio
 
     assert result == {"models_retired": 2, "shadow_trades_closed": 1}
     assert db.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_candidate_cannot_replace_incumbent_without_comparative_evidence(monkeypatch):
+    service = RlTrainingService()
+    service.settings = SimpleNamespace(shadow_forward_max_trial_days=7, shadow_forward_min_trades=20)
+    candidate = RlModel(id=2, symbol="ETH/USDT", timeframe="1h", status="SHADOW", is_active=False,
+        metrics={"backtest_passed": True}, created_at=datetime.now(timezone.utc))
+    async def shadow(*args): return candidate
+    async def active(*args): return RlModel(id=1, status="ACTIVE", is_active=True)
+    async def report(*args):
+        return SimpleNamespace(status="PASSED", reason="passed", closed_trades=30, wins=20, losses=10,
+            win_rate=66, profit_factor=2, total_pnl=10, max_drawdown_percent=2)
+    async def compare(*args, **kwargs): return {"status": "PENDING", "reason": "need common period"}
+    monkeypatch.setattr(service, "shadow_for", shadow)
+    monkeypatch.setattr(service, "active_for", active)
+    monkeypatch.setattr(service.shadow_trading, "report", report)
+    monkeypatch.setattr("app.services.model_comparison.compare_models", compare)
+    class Db:
+        async def flush(self): pass
+        async def execute(self, statement): raise AssertionError("must not retire incumbent")
+    assert await service.evaluate_shadow_promotion(Db(), "ETH/USDT", "1h") == "PENDING_COMPARISON"
+    assert candidate.status == "SHADOW"
+    assert not candidate.is_active

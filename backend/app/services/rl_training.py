@@ -346,6 +346,16 @@ class RlTrainingService:
             record.metrics = {**metrics, "forward_status": "FAILED", "forward_rejection_reason": report.reason}
             await db.flush()
             return "REJECTED"
+        incumbent = await self.active_for(db, symbol, timeframe)
+        if incumbent and incumbent.id != record.id:
+            from app.services.model_comparison import compare_models
+            comparison = await compare_models(db, record, incumbent,
+                min_trades=max(int(self.settings.shadow_forward_min_trades), 20))
+            metrics = {**metrics, "comparison": comparison}
+            record.metrics = metrics
+            if comparison["status"] != "PASSED":
+                await db.flush()
+                return "PENDING_COMPARISON"
         await db.execute(
             update(RlModel)
             .where(
@@ -392,13 +402,14 @@ class RlTrainingService:
             agent_name = "rl_policy" if record.is_active else "rl_shadow"
             model = self._deserialize(record.artifact)
             decisions[agent_name] = self._store_decision(db, record, model, frame, agent_name=agent_name)
-            if agent_name == "rl_shadow":
+            if agent_name in {"rl_shadow", "rl_policy"}:
                 await db.flush()
                 await self.shadow_trading.process(
                     db,
                     record,
                     decisions[agent_name],
                     float(frame.iloc[-1]["close"]),
+                    benchmark=agent_name == "rl_policy",
                 )
         await db.commit()
         return decisions.get("rl_policy"), decisions.get("rl_shadow")

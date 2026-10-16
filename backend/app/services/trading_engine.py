@@ -495,6 +495,7 @@ class TradingEngine:
                         reserved_stop_risk=reserved_stop_risk,
                         candidate_stop_risk=round(candidate_stop_risk, 4),
                         daily_risk_limit=round(balance * trade_settings.daily_risk_percent / 100, 4),
+                        sizing=self._entry_sizing(coin, signal.signal, balance, trade_settings),
                         **self._entry_log_context(coin, signal, entry_snapshot),
                     )
                     if self.settings.telegram_trade_reports_enabled:
@@ -543,6 +544,7 @@ class TradingEngine:
                         reserved_stop_risk=reserved_stop_risk,
                         candidate_stop_risk=round(candidate_stop_risk, 4),
                         daily_risk_limit=round(balance * trade_settings.daily_risk_percent / 100, 4),
+                        sizing=self._entry_sizing(coin, signal.signal, balance, trade_settings),
                         **self._entry_log_context(coin, signal, entry_snapshot),
                     )
                     decisions.append(
@@ -568,7 +570,8 @@ class TradingEngine:
                     reserved_stop_risk=reserved_stop_risk,
                     candidate_stop_risk=round(candidate_stop_risk, 4),
                     daily_risk_limit=round(balance * trade_settings.daily_risk_percent / 100, 4),
-                    **self._entry_log_context(coin, signal, entry_snapshot),
+                    sizing=self._entry_sizing(coin, signal.signal, balance, trade_settings),
+                        **self._entry_log_context(coin, signal, entry_snapshot),
                 )
                 decisions.append(
                     TradingDecision(symbol=coin.symbol, signal=signal.signal, score=signal.score, action="SKIPPED", reason=reason)
@@ -822,6 +825,25 @@ class TradingEngine:
     def _paper_learning_lane_enabled(self) -> bool:
         return bool(self.settings.paper_trading and self.settings.paper_exploration_enabled)
 
+    def _entry_sizing(self, coin, signal: str, balance: float, settings: RiskSettings) -> dict:
+        if signal not in {"BUY", "SELL"}:
+            return {"available": False, "note": "Нет направленного сигнала"}
+        try:
+            stop, take, _ = self._exit_plan(coin.price, coin.atr, "LONG" if signal == "BUY" else "SHORT", settings)
+            volume = self.risk.calculate_position_size(balance, settings.risk_percent, coin.price, stop,
+                max_position_percent=settings.max_position_size_percent,
+                min_notional=self._minimum_entry_notional(), max_risk_percent=settings.max_risk_percent_per_trade)
+            leverage = min(self.settings.futures_leverage, self.settings.futures_max_leverage) if self.exchange.is_derivatives_market() else 1
+            notional = volume * coin.price
+            return {"available": volume > 0, "notional": round(notional, 6), "volume": volume,
+                "estimated_margin": round(notional / max(leverage, 1), 6), "leverage": leverage,
+                "stop_risk": round(abs(coin.price - stop) * volume, 6), "stop": stop, "take": take,
+                "estimated_entry_fee": round(notional * self.settings.paper_fee_rate, 6) if self.settings.paper_trading else None,
+                "minimum": self.settings.min_entry_notional_usdt,
+                "note": "Расчёт до исполнения; не подтверждение допуска или заявки"}
+        except (ValueError, TypeError, ArithmeticError):
+            return {"available": False, "note": "Некорректные данные для расчёта"}
+
     def _minimum_entry_notional(self) -> float:
         # Cover adverse SELL slippage as well as eight-decimal size rounding.
         slippage = self.settings.paper_slippage_bps / 10_000 if self.settings.paper_trading else 0.0
@@ -1064,6 +1086,7 @@ class TradingEngine:
             return None
         stop, take, initial_risk = self._exit_plan(entry_price, coin.atr, side, settings)
         entry_context = self.learning.entry_context(coin, signal, signal_reasons)
+        entry_context["execution_mode"] = "PAPER" if self.settings.paper_trading else "LIVE"
         entry_context["exit_plan"] = {
             "entry_atr": round(float(coin.atr or 0.0), 8),
             "atr_stop_multiplier": round(float(settings.atr_stop_multiplier), 4),

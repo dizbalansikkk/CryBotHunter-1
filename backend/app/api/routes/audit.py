@@ -11,9 +11,38 @@ from app.models.entities import User, UserSettings
 from app.schemas.dto import TradingAuditOut
 from app.services.trading_audit import TradingAuditService
 from app.services.activity_audit import ActivityAuditService
+from app.services.control_dashboard import ControlDashboardService
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
+
+
+@router.get("/control/entries")
+async def control_entries(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    return await ControlDashboardService().entries(db)
+
+
+@router.get("/control/positions")
+async def control_positions(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    return await ControlDashboardService().positions(db)
+
+
+@router.get("/control/positions/{position_id}")
+async def control_position(position_id: int, _: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    result = await ControlDashboardService().lifecycle(db, position_id)
+    if result is None:
+        raise HTTPException(404, "Позиция не найдена")
+    return result
+
+
+@router.get("/control/learning")
+async def control_learning(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    return await ControlDashboardService().learning(db)
+
+
+@router.get("/control/storage")
+async def control_storage(_: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    return await ControlDashboardService().storage(db)
 
 
 @router.get("/activity")

@@ -33,8 +33,11 @@ class ShadowTradingService:
         record: RlModel,
         decision: AgentDecision,
         market_price: float,
+        *,
+        benchmark: bool = False,
     ) -> ShadowTrade | None:
-        if record.status != "SHADOW" or record.is_active or market_price <= 0:
+        eligible = (record.status == "SHADOW" and not record.is_active) or (benchmark and record.status == "ACTIVE" and record.is_active)
+        if not eligible or market_price <= 0:
             return None
         opened = (
             await db.execute(
@@ -53,8 +56,8 @@ class ShadowTradingService:
                 report = await self.report(db, record.id, include=opened)
                 record.metrics = {
                     **(record.metrics or {}),
-                    "forward_status": report.status,
-                    "forward": self._report_dict(report),
+                    **({"benchmark": self._report_dict(report)} if benchmark else {
+                        "forward_status": report.status, "forward": self._report_dict(report)}),
                 }
             return opened
         if decision.action not in {"BUY", "SELL"} or decision.confidence < float(self.settings.shadow_trade_min_confidence):

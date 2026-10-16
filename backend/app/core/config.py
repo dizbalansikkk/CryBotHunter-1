@@ -78,6 +78,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXCHANGE_PASSPHRASE", "API_PASSPHRASE"),
     )
     log_retention_days: int = 90
+    technical_log_cleanup_enabled: bool = True
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids_raw: str = Field(default="", validation_alias="TELEGRAM_ALLOWED_CHAT_IDS")
     telegram_trade_reports_enabled: bool = True

@@ -16,6 +16,11 @@ class StrategyReleaseAudit:
 
     PARAMETER_NAMES = (
         "primary_trading_market",
+        "min_entry_notional_usdt",
+        "telegram_quiet_mode",
+        "telegram_notification_photos_enabled",
+        "technical_log_cleanup_enabled",
+        "log_retention_days",
         "exchange_default_type",
         "paper_trading",
         "live_trading_enabled",

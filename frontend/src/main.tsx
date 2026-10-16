@@ -1,4 +1,5 @@
 import ProfitEventsPanel from "./ProfitEventsPanel";
+import ControlPanel from "./ControlPanel";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -630,6 +631,7 @@ function TradingAuditView() {
   return (
     <section className="space-y-5">
       <ActivityAuditPanel />
+      <ControlPanel />
       <Header title="Итоги закрытых сделок — 30 полных дней" subtitle="Этот раздел заканчивается вчера. Сегодняшние данные и срезы доступны выше.">
         <button className="btn" onClick={() => void load()} disabled={loading}><RefreshCw size={16} /> {loading ? "Обновляется" : "Обновить отчёт"}</button>
       </Header>

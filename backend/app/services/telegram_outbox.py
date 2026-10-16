@@ -7,6 +7,7 @@ from sqlalchemy import and_, delete, or_, select
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.models.entities import TelegramOutboxMessage
+from app.services.log_retention import cleanup_technical_logs
 
 
 class TelegramOutboxService:
@@ -150,6 +151,7 @@ class TelegramOutboxService:
         retention_days = max(int(self.settings.telegram_outbox_retention_days), 1)
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
         async with AsyncSessionLocal() as db:
+            await cleanup_technical_logs(db)
             result = await db.execute(
                 delete(TelegramOutboxMessage).where(
                     TelegramOutboxMessage.status == "DELIVERED",

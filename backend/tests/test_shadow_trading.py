@@ -109,3 +109,17 @@ def test_shadow_trade_closes_on_model_flip_with_realistic_costs():
     assert trade.status == "CLOSED"
     assert trade.pnl < 2
     assert trade.fee > 0.04
+
+
+@pytest.mark.asyncio
+async def test_active_benchmark_is_explicit_and_has_no_trading_authority():
+    service = ShadowTradingService()
+    service.settings = settings()
+    record = RlModel(id=12, symbol="ETH/USDT", timeframe="1h", status="ACTIVE", is_active=True, metrics={})
+    decision = AgentDecision(id=30, action="BUY", confidence=0.8)
+    assert await service.process(Db(), record, decision, 100) is None
+    db = Db()
+    trade = await service.process(db, record, decision, 100, benchmark=True)
+    assert trade.entry_context["trading_authority"] is False
+    assert trade.model_id == 12
+    assert record.status == "ACTIVE"
