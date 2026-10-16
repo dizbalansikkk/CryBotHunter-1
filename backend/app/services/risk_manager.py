@@ -126,6 +126,8 @@ class RiskManager:
         entry_price: float,
         stop_price: float,
         max_position_percent: float = 100.0,
+        min_notional: float = 0.0,
+        max_risk_percent: float | None = None,
     ) -> float:
         values = (balance, risk_percent, entry_price, stop_price, max_position_percent)
         if not all(self._is_positive_finite(value) for value in values):
@@ -137,7 +139,18 @@ class RiskManager:
         risk_sized_volume = loss_budget / price_risk
         position_cap = float(balance) * min(float(max_position_percent), 100.0) / 100
         cap_sized_volume = position_cap / float(entry_price)
-        return round(min(risk_sized_volume, cap_sized_volume), 8)
+        volume = round(min(risk_sized_volume, cap_sized_volume), 8)
+        if not math.isfinite(min_notional) or min_notional < 0:
+            return 0.0
+        if min_notional > 0:
+            minimum_volume = math.ceil(min_notional / entry_price * 1e8) / 1e8
+            volume = max(volume, minimum_volume)
+            ceiling = risk_percent if max_risk_percent is None else max_risk_percent
+            if not self._is_positive_finite(ceiling):
+                return 0.0
+            if volume * price_risk > balance * ceiling / 100 + 1e-10 or volume > cap_sized_volume + 1e-10:
+                return 0.0
+        return volume
 
     def position_size(
         self,

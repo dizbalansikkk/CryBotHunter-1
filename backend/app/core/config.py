@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     allow_live_trading_without_sandbox: bool = False
     market_data_mode: str = "ccxt"
     paper_fee_rate: float = 0.0004
+    min_entry_notional_usdt: float = 5.0
     paper_slippage_bps: float = 2.0
     execution_latency_ms: int = 250
     execution_market_impact_bps: float = 1.5

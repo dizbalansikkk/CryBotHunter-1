@@ -49,6 +49,7 @@ class ExecutionService:
         reason: str,
         *,
         paper_learning: bool = False,
+        min_notional: float = 0.0,
     ) -> Order:
         order = Order(
             symbol=symbol,
@@ -99,6 +100,12 @@ class ExecutionService:
             else:
                 try:
                     prepared_order = await self.exchange.prepare_order(symbol, amount, reference_price)
+                    price_floor = reference_price * (
+                        1 - self.settings.paper_slippage_bps / 10_000
+                        if self.settings.paper_trading and side.lower() == "sell" else 1
+                    )
+                    if prepared_order.amount * price_floor + 1e-10 < min_notional:
+                        raise OrderMinimumError("Normalized entry notional is below configured minimum")
                 except OrderMinimumError as exc:
                     if not (paper_learning and reason == "ENTRY" and self.settings.paper_trading
                             and self.settings.paper_exploration_enabled and not self.settings.live_trading_enabled):
@@ -111,6 +118,11 @@ class ExecutionService:
                         min_amount=None, min_cost=None, metadata_available=False)
                     order.raw = {**order.raw, "paper_learning_subminimum": True,
                         "venue_executable": False, "venue_minimum_reason": str(exc)}
+            fill_price_floor = reference_price
+            if self.settings.paper_trading and side.lower() == "sell":
+                fill_price_floor *= 1 - self.settings.paper_slippage_bps / 10_000
+            if prepared_order.amount * fill_price_floor + 1e-10 < min_notional:
+                raise OrderMinimumError("Normalized entry notional is below configured minimum")
             order.requested_amount = prepared_order.amount
             order.raw = {
                 **(order.raw or {}),

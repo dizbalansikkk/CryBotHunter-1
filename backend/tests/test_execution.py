@@ -301,3 +301,17 @@ def test_native_protective_stops_are_limited_to_supported_derivatives(monkeypatc
 
     monkeypatch.setattr(client.settings, "exchange_default_type", "spot")
     assert client.supports_native_protective_stops() is False
+
+
+@pytest.mark.asyncio
+async def test_entry_minimum_checked_after_exchange_rounding(monkeypatch):
+    class RoundedExchange(LowBalanceExchange):
+        def is_derivatives_market(self):
+            return True
+        async def prepare_order(self, *args):
+            return PreparedOrder(amount=0.49, fee_rate=0.001, min_amount=None, min_cost=None, metadata_available=True)
+    service = ExecutionService(RoundedExchange())
+    monkeypatch.setattr(service.settings, "paper_trading", True)
+    order = await service.execute_market(Db(), "LINK/USDT", "sell", 0.5002, 10, "ENTRY", min_notional=5)
+    assert order.status == "FAILED"
+    assert "configured minimum" in order.raw["message"]

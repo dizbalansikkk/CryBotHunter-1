@@ -227,3 +227,18 @@ def test_drawdown_uses_equity_peak_and_triggers_emergency_at_five_percent():
 def test_drawdown_rejects_nan_instead_of_understating_portfolio_risk():
     with pytest.raises(ValueError, match="closed_pnls"):
         RiskManager().calculate_drawdown(1000, [float("nan")])
+
+
+def test_minimum_entry_notional_raises_small_size_within_hard_risk_cap():
+    size = RiskManager().calculate_position_size(100, 0.01, 10, 9.9,
+        min_notional=5.01, max_risk_percent=0.15)
+    assert size * 10 >= 5.01
+    assert size * 0.1 <= 0.15
+
+
+def test_minimum_entry_cannot_exceed_risk_or_position_cap():
+    manager = RiskManager()
+    assert manager.calculate_position_size(100, 0.01, 10, 9,
+        min_notional=5, max_risk_percent=0.15) == 0
+    assert manager.calculate_position_size(10, 0.01, 10, 9.99,
+        max_position_percent=25, min_notional=5, max_risk_percent=2) == 0

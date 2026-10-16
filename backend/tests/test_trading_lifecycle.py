@@ -239,7 +239,7 @@ def test_exposure_gate_rejects_overloaded_portfolio():
 
 def test_daily_risk_gate_reserves_open_stop_distance_before_new_entry():
     engine = TradingEngine()
-    engine.settings = SimpleNamespace(daily_risk_reserve_enabled=True)
+    engine.settings = SimpleNamespace(daily_risk_reserve_enabled=True, paper_trading=True, paper_slippage_bps=2, min_entry_notional_usdt=5)
     settings = risk_settings()
     settings.daily_risk_percent = 1
 

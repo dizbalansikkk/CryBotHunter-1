@@ -387,6 +387,11 @@ class TradingEngine:
                 if not daily_risk_allowed:
                     accepted = False
                     reason = daily_risk_reason
+                elif candidate_stop_risk > balance * trade_settings.risk_percent / 100 + 0.0001:
+                    reason += (
+                        f"; entry raised to {self.settings.min_entry_notional_usdt:.2f} USDT minimum"
+                        f" within hard risk cap; stop risk={candidate_stop_risk:.4f} USDT"
+                    )
             if accepted:
                 exposure_allowed, exposure_reason, candidate_notional = self._exposure_gate(
                     coin,
@@ -815,9 +820,15 @@ class TradingEngine:
     def _paper_learning_lane_enabled(self) -> bool:
         return bool(self.settings.paper_trading and self.settings.paper_exploration_enabled)
 
+    def _minimum_entry_notional(self) -> float:
+        # Cover adverse SELL slippage as well as eight-decimal size rounding.
+        slippage = self.settings.paper_slippage_bps / 10_000 if self.settings.paper_trading else 0.0
+        return max(self.settings.min_entry_notional_usdt, 0.0) / max(1.0 - slippage, 0.01)
+
     def _paper_exploration_settings(self, settings: RiskSettings) -> RiskSettings:
         return replace(
             settings,
+            max_risk_percent_per_trade=min(settings.max_risk_percent_per_trade, self.settings.paper_exploration_max_risk_percent),
             risk_percent=min(
                 float(settings.risk_percent),
                 max(float(self.settings.paper_exploration_risk_percent), 0.01),
@@ -1028,6 +1039,8 @@ class TradingEngine:
             coin.price,
             stop,
             max_position_percent=settings.max_position_size_percent,
+            min_notional=self._minimum_entry_notional(),
+            max_risk_percent=settings.max_risk_percent_per_trade,
         )
         if volume <= 0:
             return None
@@ -1039,6 +1052,7 @@ class TradingEngine:
             coin.price,
             "ENTRY",
             paper_learning=paper_exploration,
+            min_notional=self.settings.min_entry_notional_usdt,
         )
         if entry_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not entry_order.average_price:
             return None
@@ -1317,10 +1331,12 @@ class TradingEngine:
             coin.price,
             stop,
             max_position_percent=settings.max_position_size_percent,
+            min_notional=self._minimum_entry_notional(),
+            max_risk_percent=settings.max_risk_percent_per_trade,
         )
         candidate_stop_risk = round(abs(coin.price - stop) * volume, 4)
         if candidate_stop_risk <= 0:
-            return False, "candidate stop risk is zero", 0.0
+            return False, "entry size unavailable: minimum notional cannot fit risk/position limits or sizing inputs are invalid", 0.0
         if not getattr(self.settings, "daily_risk_reserve_enabled", True):
             return True, "daily risk reserve disabled", candidate_stop_risk
         allowed, reason = self.risk.can_add_daily_risk_reserve(
@@ -1351,6 +1367,8 @@ class TradingEngine:
             coin.price,
             stop,
             max_position_percent=settings.max_position_size_percent,
+            min_notional=self._minimum_entry_notional(),
+            max_risk_percent=settings.max_risk_percent_per_trade,
         )
         candidate_notional = self.risk.position_notional(coin.price, volume)
         venue_limit = (
