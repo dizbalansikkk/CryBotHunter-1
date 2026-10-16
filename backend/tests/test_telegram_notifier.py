@@ -38,6 +38,7 @@ async def test_broadcast_sends_formatted_text_and_photo(monkeypatch):
         telegram_bot_token="test-token",
         telegram_allowed_chat_ids=[12345],
         telegram_outbox_enabled=False,
+        telegram_notification_photos_enabled=True,
     )
     notifier.base_url = "https://telegram.invalid/bottest-token"
 

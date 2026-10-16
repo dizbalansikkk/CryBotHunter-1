@@ -96,6 +96,8 @@ class TradingEngine:
         exit_price: float | None = None,
         exit_reason: str | None = None,
     ) -> bytes | None:
+        if not self.settings.telegram_notification_photos_enabled:
+            return None
         candles: list[list[float]] | None = None
         try:
             candles = await self.exchange.fetch_ohlcv(position.symbol, timeframe="1h", limit=48)

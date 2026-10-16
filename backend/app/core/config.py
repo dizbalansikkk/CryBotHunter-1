@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids_raw: str = Field(default="", validation_alias="TELEGRAM_ALLOWED_CHAT_IDS")
     telegram_trade_reports_enabled: bool = True
+    telegram_quiet_mode: bool = True
+    telegram_notification_photos_enabled: bool = False
     telegram_cycle_reports_enabled: bool = True
     telegram_cycle_report_interval_minutes: int = 5
     telegram_outbox_enabled: bool = True

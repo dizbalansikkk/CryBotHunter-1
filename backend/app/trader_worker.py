@@ -75,7 +75,7 @@ async def main() -> None:
             release.config_hash[:12],
             settings.primary_trading_market,
         )
-    if settings.telegram_trade_reports_enabled:
+    if settings.telegram_trade_reports_enabled and not settings.telegram_quiet_mode:
         await notifier.broadcast(
             format_worker_started(
                 paper_trading=settings.paper_trading,
@@ -156,6 +156,7 @@ async def main() -> None:
                                 )
                                 if (
                                     settings.telegram_cycle_reports_enabled
+                                    and not settings.telegram_quiet_mode
                                     and (report_due or run.opened > 0 or tick.closed > 0)
                                 ):
                                     await notifier.broadcast(

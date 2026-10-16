@@ -113,6 +113,9 @@ class TelegramNotifier:
     ) -> int:
         if not self.enabled:
             return 0
+        if not getattr(self.settings, "telegram_notification_photos_enabled", False):
+            photo = None
+            photo_caption = None
         if getattr(self.settings, "telegram_outbox_enabled", True):
             try:
                 message_ids = await self.outbox.enqueue_many(
