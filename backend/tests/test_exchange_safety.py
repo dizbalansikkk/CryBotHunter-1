@@ -28,6 +28,8 @@ class FakeMarketClient:
 
 
 class FakeExchange:
+    def fetch(self, *args, **kwargs):
+        raise AssertionError("No real HTTP in client configuration test")
     instances = []
 
     def __init__(self, params):

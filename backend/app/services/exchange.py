@@ -369,6 +369,8 @@ class ExchangeClient:
         # on fapi/dapi metadata they do not use.
         if self.exchange == "binance" and market_type == "spot":
             options["fetchMarkets"] = ["spot"]
+        elif self.exchange == "binance" and market_type in self._DERIVATIVE_MARKET_TYPES:
+            options["fetchMarkets"] = ["linear"]
         params: dict[str, Any] = {
             "enableRateLimit": True,
             "options": options,
@@ -384,6 +386,9 @@ class ExchangeClient:
             if passphrase:
                 params["password"] = passphrase
         client = exchange_class(params)
+        if self.exchange == "binance":
+            from app.services.exchange_throttle import install_binance_guard
+            install_binance_guard(client)
         if authenticated and self.settings.exchange_sandbox_enabled and hasattr(client, "set_sandbox_mode"):
             client.set_sandbox_mode(True)
         self._clients[authenticated] = client
@@ -470,8 +475,11 @@ class ExchangeClient:
         if exchange_class is None:
             raise RuntimeError(f"Unsupported exchange: {self.exchange}")
         self._derivatives_client = exchange_class(
-            {"enableRateLimit": True, "options": {"defaultType": "swap"}}
+            {"enableRateLimit": True, "options": {"defaultType": "swap", **({"fetchMarkets": ["linear"]} if self.exchange == "binance" else {})}}
         )
+        if self.exchange == "binance":
+            from app.services.exchange_throttle import install_binance_guard
+            install_binance_guard(self._derivatives_client)
         return self._derivatives_client
 
     def _derivative_symbol(self, client: ccxt.Exchange, symbol: str) -> str:
