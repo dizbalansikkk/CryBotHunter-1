@@ -15,13 +15,29 @@ class HistoricalDataService:
     def __init__(self, exchange: ExchangeClient | None = None) -> None:
         self.exchange = exchange or ExchangeClient()
 
-    async def ingest_many(self, db: AsyncSession, symbols: list[str], timeframes: list[str], limit: int = 500) -> dict[str, int]:
+    async def ingest_many(self, db: AsyncSession, symbols: list[str], timeframes: list[str], limit: int = 500, incremental: bool = False) -> dict[str, int]:
         inserted: dict[str, int] = {}
         for symbol in symbols:
             for timeframe in timeframes:
                 key = f"{symbol}:{timeframe}"
-                inserted[key] = await self.ingest(db, symbol=symbol, timeframe=timeframe, limit=limit)
+                fetch_limit = limit
+                if incremental and get_settings().uses_live_market_data:
+                    result = await db.execute(select(func.count(Candle.id), func.max(Candle.timestamp)).where(
+                        Candle.symbol == symbol, Candle.timeframe == timeframe, Candle.source == 'ccxt'))
+                    count, latest = result.one()
+                    fetch_limit = self.incremental_limit(timeframe, limit, count, latest, datetime.now(timezone.utc))
+                inserted[key] = await self.ingest(db, symbol=symbol, timeframe=timeframe, limit=fetch_limit) if fetch_limit else 0
         return inserted
+
+    def incremental_limit(self, timeframe, target, count, latest, now):
+        if not latest or count < target:
+            return target
+        interval = self._timeframe_milliseconds(timeframe) / 1000
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+        gap = int(now.timestamp() // interval - latest.timestamp() // interval)
+        # Refresh the previous forming candle when a new interval starts.
+        return min(target, gap + 2) if gap > 0 else 0
 
     async def ingest(self, db: AsyncSession, symbol: str, timeframe: str = "1h", limit: int = 500) -> int:
         candles = await self._fetch(symbol, timeframe, limit)

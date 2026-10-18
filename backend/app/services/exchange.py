@@ -114,6 +114,13 @@ class ExchangeClient:
         return {asset: float(amount) for asset, amount in balance.get("total", {}).items() if amount}
 
     async def fetch_tickers(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        if self.exchange == "binance" and self.is_derivatives_market() and self.settings.binance_market_stream_enabled:
+            from app.services.market_stream import read_snapshots
+            snapshots = await asyncio.to_thread(read_snapshots, 'ticker', symbols)
+            books = await asyncio.to_thread(read_snapshots, 'book', symbols)
+            if all(symbol in snapshots and symbol in books for symbol in symbols):
+                return {symbol: {**snapshots[symbol], 'bid': books[symbol]['bids'][0][0],
+                                 'ask': books[symbol]['asks'][0][0]} for symbol in symbols}
         client = self._client(authenticated=False)
 
         def fetch() -> dict[str, dict[str, Any]]:
@@ -141,6 +148,12 @@ class ExchangeClient:
         )
 
     async def fetch_order_book(self, symbol: str, limit: int = 20) -> dict[str, Any]:
+        if self.exchange == "binance" and self.is_derivatives_market() and self.settings.binance_market_stream_enabled and limit <= 20:
+            from app.services.market_stream import read_snapshots
+            snapshots = await asyncio.to_thread(read_snapshots, 'book', [symbol])
+            if symbol in snapshots:
+                book = snapshots[symbol]
+                return {**book, 'bids': book['bids'][:limit], 'asks': book['asks'][:limit]}
         client = self._client(authenticated=False)
         return await asyncio.to_thread(
             lambda: client.fetch_order_book(self._loaded_market_symbol(client, symbol), max(int(limit), 5))

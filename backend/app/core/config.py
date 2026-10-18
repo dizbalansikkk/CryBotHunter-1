@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     exchange_default_type: str = "future"
     primary_trading_market: str = "future"
     futures_margin_mode: str = "isolated"
+    binance_rest_public_budget: int = Field(default=600, ge=100, le=1200)
+    binance_rest_total_budget: int = Field(default=900, ge=100, le=1800)
+    binance_market_stream_enabled: bool = True
     futures_leverage: int = 2
     futures_max_leverage: int = 3
     futures_min_liquidation_buffer_percent: float = 8.0

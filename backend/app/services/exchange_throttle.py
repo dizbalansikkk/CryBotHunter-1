@@ -11,6 +11,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
+from app.services.request_budget import request_policy, reserve_request
 
 
 @lru_cache(maxsize=1)
@@ -46,32 +47,53 @@ def install_binance_guard(client):
             raise ccxt.ExchangeNotAvailable("Binance request coordination unavailable") from exc
         if deadline > now:
             raise ccxt.RateLimitExceeded(f"Binance cooldown active until {int(deadline * 1000)}; no HTTP request sent")
-        # Metadata is public and unchanged between adjacent scan cycles.
+        # Share public responses, never private balances or order responses.
         cache_key = None
-        if method == "GET" and "exchangeInfo" in url and not body:
-            cache_key = "binance:metadata:" + sha256(url.encode()).hexdigest()
-            cached = store.get(cache_key)
-            if cached:
-                return json.loads(cached)
+        _, ttl, _ = request_policy(url, method, headers)
         try:
-            result = original(url, method, headers, body)
-        except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as exc:
-            local_until = cooldown_until(exc, getattr(client, "last_response_headers", {}), time.time())
-            script = """local old = tonumber(redis.call('get', KEYS[1]) or '0')
-            local new = tonumber(ARGV[1])
-            if new > old then redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2]) end
-            return 1"""
+            if ttl and not body:
+                cache_key = "binance:metadata:" + sha256(url.encode()).hexdigest()
+                cached = store.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            # Coalesce cache misses across all workers. No waiting thread or
+            # duplicate upstream request; callers retry on their next normal cycle.
+            lock_key = cache_key + ':loading' if cache_key else None
+            token = str(time.time_ns())
+            if lock_key and not store.set(lock_key, token, nx=True, ex=60):
+                raise ccxt.RateLimitExceeded('Shared Binance data fetch in progress; no HTTP request sent')
+        except RedisError as exc:
+            raise ccxt.ExchangeNotAvailable("Binance request coordination unavailable") from exc
+        try:
+            # Admission failures are local and must not create an exchange ban.
+            reserve_request(store, url, method, headers)
             try:
-                store.eval(script, 1, "binance:cooldown:until", local_until,
-                           max(math.ceil(local_until - time.time()), 1))
-            except RedisError:
-                pass
-            raise
-        if cache_key:
-            try:
-                store.setex(cache_key, 1800, json.dumps(result))
-            except RedisError:
-                pass
-        return result
+                result = original(url, method, headers, body)
+            except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as exc:
+                local_until = cooldown_until(exc, getattr(client, "last_response_headers", {}), time.time())
+                script = """local old = tonumber(redis.call('get', KEYS[1]) or '0')
+                local new = tonumber(ARGV[1])
+                if new > old then redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2]) end
+                return 1"""
+                try:
+                    store.eval(script, 1, "binance:cooldown:until", local_until,
+                               max(math.ceil(local_until - time.time()), 1))
+                except RedisError:
+                    pass
+                raise
+            if cache_key:
+                try:
+                    store.setex(cache_key, ttl, json.dumps(result))
+                except RedisError:
+                    pass
+            return result
+        except RedisError as exc:
+            raise ccxt.ExchangeNotAvailable("Binance request coordination unavailable") from exc
+        finally:
+            if lock_key:
+                try:
+                    store.eval("if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) end return 0", 1, lock_key, token)
+                except RedisError:
+                    pass
 
     client.fetch = guarded

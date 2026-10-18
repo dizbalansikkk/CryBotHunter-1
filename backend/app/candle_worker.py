@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 import ccxt
 
@@ -9,6 +10,7 @@ from app.models.entities import LogEntry
 from app.services.history import HistoricalDataService
 from app.services.heartbeat import HeartbeatReporter
 from app.services.locks import RedisLockManager
+from app.services.market_stream import run_market_collector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,8 +29,12 @@ async def main() -> None:
         settings.candle_ingest_loop_seconds,
     )
     await heartbeat.start()
+    collector = asyncio.create_task(run_market_collector(), name="binance-market-collector")
     try:
         while True:
+            if collector.done() and (collector.cancelled() or collector.exception() is not None):
+                logger.warning('Restarting market collector after connection/lease failure')
+                collector = asyncio.create_task(run_market_collector(), name='binance-market-collector')
             try:
                 async with AsyncSessionLocal() as db:
                     await heartbeat.set_status(
@@ -47,6 +53,7 @@ async def main() -> None:
                                 symbols=settings.candle_ingest_symbols,
                                 timeframes=settings.candle_ingest_timeframes,
                                 limit=min(settings.candle_ingest_limit, 1000),
+                                incremental=True,
                             )
                             total = sum(inserted.values())
                             db.add(LogEntry(level="INFO", message=f"Candle-worker сохранил/обновил {total} свечей: {inserted}"))
@@ -68,6 +75,9 @@ async def main() -> None:
                 await heartbeat.set_status("ERROR", {"error": type(exc).__name__})
             await asyncio.sleep(delay)
     finally:
+        collector.cancel()
+        with suppress(asyncio.CancelledError):
+            await collector
         await heartbeat.stop()
         await locks.close()
         await history.exchange.close()
