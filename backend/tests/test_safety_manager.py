@@ -32,6 +32,8 @@ SAFETY_ENVIRONMENT = (
 
 
 class FakeExchange:
+    def fetch(self, *args, **kwargs):
+        raise AssertionError("No HTTP expected in fake preflight client")
     def __init__(self, fail_time_attempts: int = 0, ticker: dict | None = None) -> None:
         self.fail_time_attempts = fail_time_attempts
         self.ticker = ticker or {"symbol": "BTC/USDT", "last": 65_000.0, "timestamp": 1_750_000_000_000}

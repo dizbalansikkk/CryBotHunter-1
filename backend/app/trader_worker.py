@@ -11,6 +11,7 @@ from app.core.security import decrypt_secret
 from app.db.session import AsyncSessionLocal, engine as database_engine
 from app.models.entities import LogEntry, UserSettings
 from app.safety_manager import SafetyCredentials, SafetyManager, ShutdownController, configure_stdout_logging
+from app.services.incidents import IncidentTracker
 from app.services.control import TradingControlService
 from app.services.exchange import ExchangeClient, exchange_error_message
 from app.services.heartbeat import HeartbeatReporter
@@ -43,7 +44,8 @@ async def main() -> None:
     notifier = TelegramNotifier()
     heartbeat = HeartbeatReporter("trader-worker")
     last_cycle_report_at: datetime | None = None
-    last_error_report_at: datetime | None = None
+    incidents = IncidentTracker()
+    last_summary_at: datetime | None = None
     logger.info("Trader-worker запущен: интервал торгового цикла=%s сек.", settings.trader_loop_seconds)
     await heartbeat.start()
     schema_ready = await wait_for_required_tables(
@@ -137,8 +139,10 @@ async def main() -> None:
                                 )
                                 summary = _cycle_summary(run.scanned, run.opened, run.skipped, run.decisions, tick.closed)
                                 cycle_metrics = _cycle_metrics(run.decisions)
-                                logger.info(summary)
-                                db.add(LogEntry(level="INFO", message=summary))
+                                if _report_due(last_summary_at, 30) or run.opened or tick.closed:
+                                    logger.info(summary)
+                                    db.add(LogEntry(level="INFO", message=summary))
+                                    last_summary_at = datetime.now(timezone.utc)
                                 await db.commit()
                                 await heartbeat.set_status(
                                     "OK",
@@ -150,6 +154,8 @@ async def main() -> None:
                                         **cycle_metrics,
                                     },
                                 )
+                                if incidents.recover():
+                                    await notifier.broadcast("✅ Торговый цикл восстановлен после ошибки. Проверка завершена успешно.")
                                 report_due = _report_due(
                                     last_cycle_report_at,
                                     settings.telegram_cycle_report_interval_minutes,
@@ -181,21 +187,25 @@ async def main() -> None:
                 market_type=settings.exchange_default_type,
                 sandbox=settings.exchange_sandbox_enabled,
             )
-            logger.error("Биржа недоступна для trader-worker: %s", message)
-            await _record_worker_log(message)
+            report_error = incidents.should_report(type(exc).__name__)
+            if report_error:
+                logger.error("Биржа недоступна для trader-worker: %s", message)
+                await _record_worker_log(message)
             await heartbeat.set_status("DEGRADED", {"error": type(exc).__name__})
-            if _report_due(last_error_report_at, 15):
+            if report_error:
                 await notifier.broadcast(format_worker_error("биржа недоступна", message))
-                last_error_report_at = datetime.now(timezone.utc)
+
             delay = max(settings.trader_loop_seconds, 300)
         except Exception as exc:
-            logger.exception("Ошибка торгового цикла trader-worker")
+            report_error = incidents.should_report(type(exc).__name__)
+            if report_error:
+                logger.exception("Ошибка торгового цикла trader-worker")
             await heartbeat.set_status("ERROR", {"error": type(exc).__name__})
-            if _report_due(last_error_report_at, 15):
+            if report_error:
                 await notifier.broadcast(
                     format_worker_error("ошибка торгового цикла", f"{type(exc).__name__}: {str(exc)[:800]}")
                 )
-                last_error_report_at = datetime.now(timezone.utc)
+
         finally:
             if exchange is not None:
                 await exchange.close()

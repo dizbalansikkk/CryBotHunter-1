@@ -315,7 +315,12 @@ class SafetyManager:
             params["secret"] = config.api_secret.get_secret_value()
             if config.passphrase:
                 params["password"] = config.passphrase.get_secret_value()
+        if config.exchange == "binance":
+            params["options"]["fetchMarkets"] = ["spot" if config.market_type == "spot" else "linear"]
         client = exchange_class(params)
+        if config.exchange == "binance":
+            from app.services.exchange_throttle import install_binance_guard
+            install_binance_guard(client)
         if config.validate_private_api and config.sandbox_enabled and hasattr(client, "set_sandbox_mode"):
             client.set_sandbox_mode(True)
         return client
