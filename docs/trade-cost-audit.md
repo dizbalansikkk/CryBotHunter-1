@@ -24,3 +24,18 @@ fees, invalid inputs, costs exceeding target, and confirmation status/quantity/
 price combinations. These tests verify accounting and evidence; they do not prove
 improved trading returns. Further changes to entry/exit strategy require separate
 historical and Paper comparisons.
+
+## Complete exit cost diagnostics
+
+New positions persist the original pre-entry cost scenario and start a versioned
+exit-fill ledger. TP1, TP2, extended targets and partially filled final exits
+record order acknowledgement, cumulative quantity, price, fee and reported
+slippage. Repeated snapshots replace the same order; lower cumulative quantities
+cannot overwrite a newer snapshot. This ledger is diagnostic and does not replace
+order reconciliation or modify the trade PnL ledger.
+
+Post-mortem diagnostics include all recorded partial-exit costs plus the final
+order exactly once. Existing positions without the version marker are labelled
+incomplete. No missing historical fees are fabricated. Funding remains excluded
+from recorded execution costs. Slippage diagnostics must not be subtracted from
+PnL again because execution prices already include it. Full suite: 401 passed.

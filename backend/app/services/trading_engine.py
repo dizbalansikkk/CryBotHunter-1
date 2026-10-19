@@ -887,6 +887,25 @@ class TradingEngine:
             f"bullish_votes={bullish_votes}, bearish_votes={bearish_votes}: {missing}"
         )
 
+    def _record_exit_fill(self, position: Position, order: Order) -> None:
+        audit = self._fill_audit(order, "EXIT")
+        if not audit["fill_confirmed"] or order.id is None:
+            return
+        context = dict(position.entry_context or {})
+        fills = list(context.get("exit_fills") or [])
+        # Each order reports cumulative executed quantity. Replace its snapshot
+        # instead of charging the same fill twice on repeated acknowledgements.
+        previous = next((fill for fill in fills if fill["order_id"] == order.id), None)
+        if previous and previous["volume"] > audit["confirmed_fill_volume"]:
+            return
+        fills = [fill for fill in fills if fill["order_id"] != order.id]
+        fills.append({"order_id": order.id, "exchange_order_id": order.exchange_order_id,
+            "volume": audit["confirmed_fill_volume"], "price": audit["fill_price"],
+            "fee": audit["fee"], "slippage": self._finite_float(order.slippage),
+            "acknowledged_at": audit["executed_at"], "status": order.status})
+        context["exit_fills"] = fills
+        position.entry_context = context
+
     def _fill_audit(self, order: Order, stage: str) -> dict:
         """Execution evidence, shared by partial and final exit journal events."""
         executed_at = order.updated_at or datetime.now(timezone.utc)
@@ -1087,6 +1106,7 @@ class TradingEngine:
         )
         if volume <= 0:
             return None
+        pre_entry_sizing = self._entry_sizing(coin, signal, balance, settings)
         entry_order = await self.execution.execute_market(
             db,
             coin.symbol,
@@ -1105,6 +1125,9 @@ class TradingEngine:
             return None
         stop, take, initial_risk = self._exit_plan(entry_price, coin.atr, side, settings)
         entry_context = self.learning.entry_context(coin, signal, signal_reasons)
+        entry_context["pre_entry_cost_scenario"] = pre_entry_sizing.get("cost_scenario", {})
+        entry_context["exit_fill_ledger_version"] = 1
+        entry_context["exit_fills"] = []
         entry_context["execution_mode"] = "PAPER" if self.settings.paper_trading else "LIVE"
         entry_context["exit_plan"] = {
             "entry_atr": round(float(coin.atr or 0.0), 8),
@@ -1580,6 +1603,7 @@ class TradingEngine:
             exit_price=exit_order.average_price,
             exit_fee=exit_order.fee,
             exit_volume=exit_order.filled_amount,
+            execution_order=exit_order,
             mark_price=price,
         )
         if closed_volume <= 0:
@@ -1688,6 +1712,7 @@ class TradingEngine:
             exit_price=exit_order.average_price,
             exit_fee=exit_order.fee,
             exit_volume=exit_order.filled_amount,
+            execution_order=exit_order,
             mark_price=price,
         )
         if closed_volume <= 0:
@@ -1819,6 +1844,7 @@ class TradingEngine:
             exit_price=exit_order.average_price,
             exit_fee=exit_order.fee,
             exit_volume=exit_order.filled_amount,
+            execution_order=exit_order,
             mark_price=price,
         )
         if closed_volume <= 0:
@@ -1945,11 +1971,14 @@ class TradingEngine:
         exit_fee: float,
         exit_volume: float,
         mark_price: float,
+        execution_order: Order | None = None,
     ) -> tuple[float, float]:
         """Record only the quantity confirmed by the exchange as exited."""
         closed_volume = self._executed_volume(exit_volume, position.volume)
         if closed_volume <= 0:
             return 0.0, 0.0
+        if execution_order is not None:
+            self._record_exit_fill(position, execution_order)
         partial_profit = self._profit_for_volume(position, exit_price, closed_volume) - exit_fee
         position.volume = round(max(position.volume - closed_volume, 0.0), 8)
         db.add(
@@ -2031,6 +2060,7 @@ class TradingEngine:
                 exit_price=exit_order.average_price,
                 exit_fee=exit_order.fee,
                 exit_volume=closed_volume,
+                execution_order=exit_order,
                 mark_price=exit_price,
             )
             self._log_trading_event(
@@ -2105,6 +2135,7 @@ class TradingEngine:
                 reason=reason,
                 cycle_id=cycle_id,
             )
+        self._record_exit_fill(position, exit_order)
         try:
             post_mortem = await self.post_mortem.analyze_trade(db, position, exit_order, reason)
             if post_mortem:

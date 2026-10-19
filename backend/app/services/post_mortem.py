@@ -204,8 +204,22 @@ class PostMortemService:
         exit_fee = self._number(exit_order.fee)
         entry_slippage_cost = self._number(entry.get("slippage")) * self._number(entry.get("volume") or volume)
         exit_slippage_cost = self._number(exit_order.slippage) * self._number(exit_order.filled_amount or volume)
+        fills = list(entry_context.get("exit_fills") or [])
+        # Final order may already be in the ledger. Do not count it twice.
+        prior = [fill for fill in fills if fill.get("order_id") != exit_order.id]
+        partial_fees = sum(self._number(fill.get("fee")) for fill in prior)
+        partial_slippage = sum(self._number(fill.get("slippage")) * self._number(fill.get("volume")) for fill in prior)
+        exit_fee += partial_fees
+        exit_slippage_cost += partial_slippage
         total_cost = entry_fee + exit_fee + entry_slippage_cost + exit_slippage_cost
         return {
+            "ledger_complete_from_entry": entry_context.get("exit_fill_ledger_version") == 1,
+            "partial_exit_fees": round(partial_fees, 6),
+            "partial_exit_slippage_cost": round(partial_slippage, 6),
+            "pre_entry_cost_scenario": entry_context.get("pre_entry_cost_scenario", {}),
+            "funding_included": False,
+            "pnl_adjustment_applied": False,
+            "cost_note": "Slippage is already reflected in fill prices; this diagnostic must not be subtracted from PnL again.",
             "entry_fee": round(entry_fee, 6),
             "exit_fee": round(exit_fee, 6),
             "entry_slippage_cost": round(entry_slippage_cost, 6),
