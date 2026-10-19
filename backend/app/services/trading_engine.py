@@ -2500,6 +2500,23 @@ class TradingEngine:
             return False
         return datetime.now(timezone.utc) < deadline
 
+    async def _audit_stop_coverage(self, db, position, order, refreshed):
+        if self.settings.paper_trading or not self.settings.live_trading_enabled or not self.exchange.is_derivatives_market():
+            return
+        from app.services.stop_coverage import assess_stop_coverage
+        coverage = assess_stop_coverage(position, order, refreshed)
+        context = dict(position.entry_context or {})
+        previous = context.get("stop_coverage", {})
+        context["stop_coverage"] = coverage
+        position.entry_context = context
+        changed = (previous.get("status"), previous.get("reason")) != (coverage["status"], coverage["reason"])
+        if changed:
+            self._log_trading_event(db, "INFO" if coverage["status"] == "COVERED" else "ERROR",
+                "STOP_COVERAGE_CHANGED", f"Stop coverage for {position.symbol}: {coverage['status']}",
+                symbol=position.symbol, position_id=position.id, coverage=coverage)
+        if coverage["status"] != "COVERED":
+            await self.control.panic("stop_coverage_requires_review")
+
     async def _process_filled_protective_stop(
         self,
         db: AsyncSession,
@@ -2511,13 +2528,16 @@ class TradingEngine:
         """Use an exchange-confirmed stop fill; never submit a duplicate exit."""
         order = await self._active_protective_stop(db, position)
         if not order:
+            await self._audit_stop_coverage(db, position, None, False)
             return False
         raw = order.raw if isinstance(order.raw, dict) else {}
         if raw.get("position_fill_consumed"):
             return False
+        refreshed = False
         if order.status == OrderStatus.NEW.value:
-            await self.execution.refresh_order(order)
+            refreshed = await self.execution.refresh_order(order)
         if order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not order.average_price:
+            await self._audit_stop_coverage(db, position, order, refreshed)
             return False
         raw = dict(order.raw or {})
         raw["position_fill_consumed"] = True

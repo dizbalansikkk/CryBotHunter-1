@@ -68,6 +68,7 @@ class DailyReportSnapshot:
     timezone_name: str = "Europe/Simferopol"
     periods: tuple[DailyPeriodReport, ...] = ()
     day_includes_current_open_pnl: bool = True
+    stop_coverage: tuple[tuple[str, int], ...] = ()
 
 
 class TelegramDailyReportService:
@@ -101,6 +102,8 @@ class TelegramDailyReportService:
         )
         pnl = self.pnl.summarize_positions(all_positions, now=generated_at)
         open_positions = [item for item in all_positions if item.status == "OPEN"]
+        from app.services.stop_coverage import summarize_coverage
+        stop_coverage = tuple(summarize_coverage(open_positions, generated_at).items())
         day_closed = [
             item
             for item in all_positions
@@ -200,6 +203,7 @@ class TelegramDailyReportService:
         )
 
         return DailyReportSnapshot(
+            stop_coverage=stop_coverage,
             generated_at=generated_at,
             paper_trading=bool(self.settings.paper_trading),
             pnl_day=round(realized_day + (float(pnl.open_pnl) if selected_date == local_now.date() else 0.0), 4),

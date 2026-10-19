@@ -397,6 +397,9 @@ def format_daily_report(snapshot: DailyReportSnapshot) -> str:
         )
     if not period_lines:
         period_lines.append("Временные срезы пока недоступны.")
+    coverage = dict(snapshot.stop_coverage)
+    protection_line = ("Paper: стопы исполняются симулятором; биржевое покрытие не проверяется." if snapshot.paper_trading else
+        f"Стопы сейчас: подтверждены {coverage.get('COVERED', 0)}, требуют проверки {coverage.get('ATTENTION', 0)}, нет свежего подтверждения {coverage.get('UNKNOWN', 0)}.")
     report_date = snapshot.report_date or snapshot.generated_at.date()
     return (
         f"<b>{result_icon} ЕЖЕДНЕВНЫЙ ОТЧЁТ · CRYBOTHUNTER</b>\n"
@@ -419,6 +422,7 @@ def format_daily_report(snapshot: DailyReportSnapshot) -> str:
         f"├ Наблюдений: <code>{snapshot.learning_observations}</code>\n"
         f"└ Активных RL-моделей: <code>{snapshot.active_rl_models}</code>\n\n"
         "<b>Надёжность</b>\n"
+        f"{_html(protection_line)}\n"
         f"├ Воркеры: <code>{_html(worker_state)}</code>\n"
         f"├ Telegram в очереди: <code>{snapshot.pending_notifications}</code>\n"
         f"└ Ошибок доставки: <code>{snapshot.failed_notifications}</code>\n\n"

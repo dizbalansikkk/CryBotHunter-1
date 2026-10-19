@@ -31,3 +31,22 @@ for every existing protective order, historical funding ingestion/simulation,
 exit-rule experiments and expanded scheduled reports. Existing backtesting
 already chooses the stop for ambiguous same-bar stop/target touches and models
 adverse stop gaps. These safety fixes are not evidence of higher strategy returns.
+
+
+## Fresh stop coverage audit
+
+Position monitoring reuses the existing order refresh to verify the exit side,
+reduceOnly flag, remaining amount (amount minus cumulative filled), trigger and
+open status. No extra market-data requests are introduced. Only a complete fresh
+response matching the local position and planned stop is COVERED. Missing data is
+UNKNOWN, not proof of missing protection. Failed or mismatched coverage sets the
+existing entry pause; it does not cancel or replace exchange orders automatically.
+Pauses require review and are not automatically lifted by later observations.
+
+Position.entry_context.stop_coverage retains the observation. Only status/reason
+transitions produce logs. Daily reports summarize current protection; observations
+older than 120 seconds are unknown. Historical daily reports explicitly present
+this as current protection, not reconstructed historical protection. Paper mode
+shows simulated stops and never claims exchange confirmation. Venue adapters that
+omit unified reduceOnly/trigger/amount fields require review rather than fallback
+to local intended parameters. This is a coverage audit, not automatic repair.
