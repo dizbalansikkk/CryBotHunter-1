@@ -5,6 +5,11 @@ from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumErr
 
 
 class Db:
+    async def commit(self):
+        pass
+    async def execute(self, statement):
+        from types import SimpleNamespace
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
     def add(self, _obj):
         return None
 
@@ -315,3 +320,57 @@ async def test_entry_minimum_checked_after_exchange_rounding(monkeypatch):
     order = await service.execute_market(Db(), "LINK/USDT", "sell", 0.5002, 10, "ENTRY", min_notional=5)
     assert order.status == "FAILED"
     assert "configured minimum" in order.raw["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('recover', [True, False])
+async def test_timeout_recovers_by_client_id_without_resubmission(monkeypatch, recover):
+    import ccxt
+    class TimeoutExchange(LiveExchange):
+        sent = 0
+        looked_up = 0
+        async def create_order(self, *args, **kwargs):
+            self.sent += 1
+            self.client_id = kwargs['client_order_id']
+            raise ccxt.RequestTimeout('response lost')
+        async def fetch_order_by_client_id(self, client_id, symbol):
+            self.looked_up += 1
+            assert client_id == self.client_id
+            if not recover:
+                raise ccxt.OrderNotFound('unknown yet')
+            return await self.fetch_order('exchange-1', symbol)
+    exchange = TimeoutExchange()
+    service = ExecutionService(exchange)
+    monkeypatch.setattr(service.settings, 'paper_trading', False)
+    class PersistentDb(Db):
+        committed = False
+        async def commit(self): self.committed = True
+    db = PersistentDb()
+    order = await service.execute_market(db, 'BTC/USDT', 'buy', 1, 100, 'ENTRY')
+    assert db.committed
+    assert exchange.sent == exchange.looked_up == 1
+    assert order.status == ('FILLED' if recover else 'NEW')
+    assert order.raw['reconciliation_required'] is (not recover)
+
+
+@pytest.mark.asyncio
+async def test_unresolved_order_blocks_another_submission(monkeypatch):
+    from types import SimpleNamespace
+    class PendingDb(Db):
+        async def execute(self, statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: 42)
+    service = ExecutionService(LiveExchange())
+    monkeypatch.setattr(service.settings, 'paper_trading', False)
+    with pytest.raises(RuntimeError, match='42.*reconciliation'):
+        await service.execute_market(PendingDb(), 'BTC/USDT', 'buy', 1, 100, 'ENTRY')
+
+
+@pytest.mark.parametrize('status', ['open', 'canceled', 'expired'])
+def test_partial_fill_is_not_lost_when_order_is_open_or_cancelled(status):
+    from app.models.entities import Order
+    service = ExecutionService()
+    order = Order(requested_amount=1, raw={})
+    service._apply_live_result(order, {'status': status, 'filled': .2, 'average': 101})
+    assert order.status == 'PARTIAL'
+    assert order.filled_amount == .2
+    assert service._positive_float(float('inf')) == 0

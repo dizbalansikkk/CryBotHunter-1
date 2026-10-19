@@ -1,6 +1,7 @@
 """Compare virtual policies on an overlapping forward period, never live orders."""
 from datetime import datetime, timezone
 import math
+import json
 
 from sqlalchemy import select
 from app.models.entities import ShadowTrade
@@ -17,6 +18,12 @@ def compare_trades(candidate, incumbent, min_trades=20, min_days=7) -> dict:
     end = min(max(aware(t.closed_at) for t in candidate), max(aware(t.closed_at) for t in incumbent))
     groups = [[t for t in rows if aware(t.entered_at) >= start and aware(t.closed_at) <= end]
               for rows in (candidate, incumbent)]
+    policies = [getattr(t, "entry_context", None) or {} for rows in groups for t in rows]
+    if any(not row.get("simulation_policy") for row in policies):
+        return {"status": "PENDING", "reason": "Нет сохранённых условий симуляции; нужны новые сопоставимые Paper-сделки"}
+    signatures = {json.dumps(row["simulation_policy"], sort_keys=True) for row in policies}
+    if len(signatures) != 1:
+        return {"status": "PENDING", "reason": "Разные условия комиссий, исполнения или выхода; сравнение заблокировано"}
     stats = []
     for rows in groups:
         returns = []

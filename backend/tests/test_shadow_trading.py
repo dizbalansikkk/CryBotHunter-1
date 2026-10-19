@@ -123,3 +123,15 @@ async def test_active_benchmark_is_explicit_and_has_no_trading_authority():
     assert trade.entry_context["trading_authority"] is False
     assert trade.model_id == 12
     assert record.status == "ACTIVE"
+
+
+def test_shadow_exit_uses_frozen_fee_and_slippage_policy():
+    service = ShadowTradingService()
+    service.settings = settings()
+    trade = ShadowTrade(side='LONG', entry_price=100, volume=1, fee=.1, slippage=0,
+        entry_context={'simulation_policy': {'fee_rate': .001, 'slippage_rate': .01}})
+    service.settings.paper_fee_rate = .1
+    service.settings.paper_slippage_bps = 200
+    service._close(trade, 110, 'TAKE_PROFIT')
+    assert trade.current_price == pytest.approx(108.9)
+    assert trade.fee == pytest.approx(.2089)

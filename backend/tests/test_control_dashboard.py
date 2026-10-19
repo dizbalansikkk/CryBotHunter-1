@@ -89,7 +89,7 @@ async def test_learning_uses_recorded_model_metrics_and_scope(database):
 def samples(pnl, count=24):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [Row(id=i, entered_at=start + timedelta(hours=12*i), closed_at=start + timedelta(hours=12*i+1),
-                pnl=pnl, entry_price=10, volume=10) for i in range(count)]
+                pnl=pnl, entry_price=10, volume=10, entry_context={"simulation_policy": {"version": 1, "fee_rate": .001}}) for i in range(count)]
 
 
 def test_comparison_requires_shared_forward_period_and_real_improvement():
@@ -105,3 +105,12 @@ def test_comparison_requires_shared_forward_period_and_real_improvement():
     for row in larger:
         row.volume *= 2
     assert compare_trades(larger, samples(1))['status'] == "FAILED"
+
+
+def test_comparison_rejects_missing_or_changed_execution_policy():
+    candidate, incumbent = samples(2), samples(1)
+    candidate[0].entry_context = {}
+    assert compare_trades(candidate, incumbent)['status'] == 'PENDING'
+    candidate = samples(2)
+    candidate[0].entry_context['simulation_policy']['fee_rate'] = .002
+    assert compare_trades(candidate, incumbent)['status'] == 'PENDING'

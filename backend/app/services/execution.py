@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 import math
+import ccxt
+from sqlalchemy import select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +53,13 @@ class ExecutionService:
         paper_learning: bool = False,
         min_notional: float = 0.0,
     ) -> Order:
+        if not self.settings.paper_trading:
+            pending = (await db.execute(select(Order.id).where(
+                Order.symbol == symbol,
+                Order.raw["reconciliation_required"].as_boolean().is_(True),
+            ).limit(1))).scalar_one_or_none()
+            if pending is not None:
+                raise RuntimeError(f"Order #{pending} requires reconciliation before another {symbol} market order")
         order = Order(
             symbol=symbol,
             side=side,
@@ -141,20 +150,40 @@ class ExecutionService:
                     await self._assert_quote_balance(prepared_order.amount, reference_price)
                 elif side.lower() == "sell" and not is_derivatives:
                     await self._assert_base_balance(symbol, prepared_order.amount)
-                raw = await self.exchange.create_order(
-                    symbol,
-                    side,
-                    prepared_order.amount,
-                    "market",
-                    client_order_id=self._client_order_id(order.id, reason),
-                    reduce_only=reduce_only,
-                )
+                client_id = self._client_order_id(order.id, reason)
+                order.raw = {**order.raw, "client_order_id": client_id, "reconciliation_required": True}
+                # Persist intent before sending: a process crash must not erase
+                # the ID needed to recover an order the venue already accepted.
+                await db.commit()
+                try:
+                    raw = await self.exchange.create_order(
+                        symbol, side, prepared_order.amount, "market",
+                        client_order_id=client_id, reduce_only=reduce_only)
+                except (ccxt.NetworkError, TimeoutError, ConnectionError) as exc:
+                    order.raw = {**order.raw, "submission_error": type(exc).__name__}
+                    try:
+                        raw = await self.exchange.fetch_order_by_client_id(client_id, symbol)
+                        order.raw = {**order.raw, "recovered_by_client_id": True}
+                    except Exception as recovery_error:
+                        # A failed lookup is not evidence that submission failed.
+                        order.status = OrderStatus.NEW.value
+                        order.raw = {**order.raw, "reconciliation_required": True,
+                                     "recovery_error": type(recovery_error).__name__}
+                        order.updated_at = datetime.now(timezone.utc)
+                        return order
                 order.exchange_order_id = str(raw.get("id") or "")
                 resolved_raw = await self._resolve_live_order(raw, symbol)
                 self._apply_live_result(order, resolved_raw)
+                terminal = str(resolved_raw.get("status", "")).lower() in {"closed", "filled", "canceled", "cancelled", "expired", "rejected"}
+                execution_known = order.status in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
+                explicitly_empty = (resolved_raw.get("filled") == 0 and
+                                    str(resolved_raw.get("status", "")).lower() in {"canceled", "cancelled", "expired", "rejected"})
+                order.raw = {**order.raw, "reconciliation_required": not (terminal and (execution_known or explicitly_empty))}
         except Exception as exc:
             order.status = OrderStatus.FAILED.value
-            order.raw = {"reason": reason, "error": exc.__class__.__name__, "message": str(exc)}
+            if isinstance(exc, (ccxt.InvalidOrder, ccxt.InsufficientFunds, ccxt.AuthenticationError, ccxt.PermissionDenied)):
+                order.raw = {**(order.raw or {}), "reconciliation_required": False}
+            order.raw = {**(order.raw or {}), "reason": reason, "error": exc.__class__.__name__, "message": str(exc)}
         order.updated_at = datetime.now(timezone.utc)
         return order
 
@@ -338,10 +367,9 @@ class ExecutionService:
         average_price = self._positive_float(raw.get("average"))
         requested_amount = max(float(order.requested_amount or 0.0), 0.0)
         status = str(raw.get("status") or "").strip().lower()
-        is_terminal = status in {"closed", "filled"}
         is_complete = requested_amount > 0 and filled_amount >= requested_amount * 0.999999
         has_execution = filled_amount > 0 and average_price > 0
-        if (is_terminal or is_complete) and has_execution:
+        if has_execution:
             # A terminal exchange order can still have filled less than was
             # requested. Preserve that distinction so callers never close or
             # resize a position using the requested amount by mistake.
@@ -370,7 +398,7 @@ class ExecutionService:
             result = float(value)
         except (TypeError, ValueError):
             return 0.0
-        return result if result > 0 and result == result else 0.0
+        return result if result > 0 and math.isfinite(result) else 0.0
 
     def _fill_paper(self, order: Order, reference_price: float, prepared_order: PreparedOrder) -> None:
         slippage_direction = 1 if order.side.lower() == "buy" else -1

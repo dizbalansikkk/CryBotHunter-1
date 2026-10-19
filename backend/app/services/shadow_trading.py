@@ -86,6 +86,13 @@ class ShadowTradingService:
             pnl=-entry_fee,
             confidence=decision.confidence,
             entry_context={
+                "simulation_policy": {
+                    "version": 1, "fee_rate": max(float(self.settings.paper_fee_rate), 0.0),
+                    "slippage_rate": slippage_rate, "notional": notional,
+                    "stop_percent": stop_percent, "take_percent": take_percent,
+                    "min_confidence": float(self.settings.shadow_trade_min_confidence),
+                    "funding_mode": "excluded",
+                },
                 "decision_id": decision.id,
                 "model_id": record.id,
                 "validation": record.metrics,
@@ -172,9 +179,10 @@ class ShadowTradingService:
         return None
 
     def _close(self, trade: ShadowTrade, market_price: float, reason: str) -> None:
-        slippage_rate = self._slippage_rate()
+        policy = (trade.entry_context or {}).get("simulation_policy", {})
+        slippage_rate = float(policy.get("slippage_rate", self._slippage_rate()))
         exit_price = market_price * (1 - slippage_rate if trade.side == "LONG" else 1 + slippage_rate)
-        exit_fee = abs(exit_price * trade.volume) * max(float(self.settings.paper_fee_rate), 0.0)
+        exit_fee = abs(exit_price * trade.volume) * float(policy.get("fee_rate", max(float(self.settings.paper_fee_rate), 0.0)))
         trade.current_price = exit_price
         trade.slippage = round(float(trade.slippage or 0.0) + abs(exit_price - market_price) * trade.volume, 8)
         trade.fee = round(float(trade.fee or 0.0) + exit_fee, 8)
@@ -184,7 +192,8 @@ class ShadowTradingService:
         trade.closed_at = datetime.now(timezone.utc)
 
     def _net_pnl(self, trade: ShadowTrade, price: float, *, include_exit_cost: bool) -> float:
-        estimated_exit_fee = abs(price * trade.volume) * max(float(self.settings.paper_fee_rate), 0.0) if include_exit_cost else 0.0
+        policy = (trade.entry_context or {}).get("simulation_policy", {})
+        estimated_exit_fee = abs(price * trade.volume) * float(policy.get("fee_rate", max(float(self.settings.paper_fee_rate), 0.0))) if include_exit_cost else 0.0
         return round(self._gross_pnl(trade, price) - float(trade.fee or 0.0) - estimated_exit_fee, 4)
 
     def _gross_pnl(self, trade: ShadowTrade, price: float) -> float:

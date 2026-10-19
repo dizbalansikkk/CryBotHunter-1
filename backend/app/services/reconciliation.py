@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import LogEntry, Order, OrderStatus
@@ -15,7 +15,8 @@ class OrderReconciliationService:
         orders = (
             await db.execute(
                 select(Order)
-                .where(Order.status.in_([OrderStatus.NEW.value, OrderStatus.FILLED.value, OrderStatus.PARTIAL.value]))
+                .where(or_(Order.status.in_([OrderStatus.NEW.value, OrderStatus.FILLED.value, OrderStatus.PARTIAL.value]),
+                           Order.raw["reconciliation_required"].as_boolean().is_(True)))
                 .order_by(Order.created_at.desc())
                 .limit(200)
             )
@@ -27,6 +28,24 @@ class OrderReconciliationService:
 
         for order in orders:
             checked += 1
+            if (order.raw or {}).get("reconciliation_required"):
+                try:
+                    raw = (await self.exchange.fetch_order(order.exchange_order_id, order.symbol)
+                           if order.exchange_order_id else
+                           await self.exchange.fetch_order_by_client_id(order.raw["client_order_id"], order.symbol))
+                    # Keep the guard until the venue fill and local inventory
+                    # have been reconciled. Updating an Order alone is insufficient.
+                    if order.raw.get("reconciliation") != "inventory_review_required":
+                        db.add(LogEntry(level="ERROR", message=f"Order #{order.id}: venue response recovered; inventory review required before resuming {order.symbol}",
+                            context={"event": "ORDER_INVENTORY_REVIEW_REQUIRED", "order_id": order.id,
+                                     "symbol": order.symbol, "exchange_order_id": raw.get("id")}))
+                    order.raw = {**order.raw, "recovery_snapshot": raw,
+                                 "reconciliation": "inventory_review_required"}
+                    order.exchange_order_id = str(raw.get("id") or order.exchange_order_id or "")
+                    updated += 1
+                except Exception as exc:
+                    order.raw = {**order.raw, "reconciliation_error": type(exc).__name__}
+                continue
             if (
                 order.status == OrderStatus.NEW.value
                 and order.created_at < cutoff

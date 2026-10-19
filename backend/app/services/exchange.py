@@ -368,6 +368,15 @@ class ExchangeClient:
         venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
         return await asyncio.to_thread(client.fetch_order, order_id, venue_symbol)
 
+    async def fetch_order_by_client_id(self, client_order_id: str, symbol: str) -> dict[str, Any]:
+        if self.exchange != "binance" or self.settings.paper_trading or not self.settings.live_trading_enabled:
+            raise RuntimeError("Client-ID recovery requires live Binance")
+        self._assert_live_safety()
+        client = self._client(authenticated=True)
+        venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
+        return await asyncio.to_thread(client.fetch_order, None, venue_symbol,
+                                       {"origClientOrderId": client_order_id})
+
     def _client(self, authenticated: bool) -> ccxt.Exchange:
         cached = self._clients.get(authenticated)
         if cached is not None:
