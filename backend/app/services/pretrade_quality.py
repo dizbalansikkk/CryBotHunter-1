@@ -91,7 +91,8 @@ class PreTradeQualityGate:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=seconds)
         result = await db.execute(
             select(Candle)
-            .where(Candle.symbol == symbol, Candle.timeframe == timeframe, Candle.timestamp <= cutoff)
+            .where(Candle.symbol == symbol, Candle.timeframe == timeframe, Candle.timestamp <= cutoff,
+                   Candle.source == ("ccxt" if self.settings.uses_live_market_data else "synthetic"))
             .order_by(Candle.timestamp.desc())
             .limit(limit)
         )

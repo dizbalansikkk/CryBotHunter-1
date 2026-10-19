@@ -21,10 +21,12 @@ class StrategyOptimizerService:
         self.history = HistoricalDataService()
 
     async def optimize(self, db: AsyncSession, symbol: str, timeframe: str = "1h", limit: int = 500, top_n: int = 5) -> list[StrategyOptimizationOut]:
-        candles = await self.history.load(db, symbol=symbol, timeframe=timeframe, limit=limit)
+        candles = await self.history.load(db, symbol=symbol, timeframe=timeframe, limit=limit,
+            source="ccxt" if self.settings.uses_live_market_data else "synthetic", closed_only=True)
         if len(candles) < 220:
             await self.history.ingest(db, symbol=symbol, timeframe=timeframe, limit=limit)
-            candles = await self.history.load(db, symbol=symbol, timeframe=timeframe, limit=limit)
+            candles = await self.history.load(db, symbol=symbol, timeframe=timeframe, limit=limit,
+                source="ccxt" if self.settings.uses_live_market_data else "synthetic", closed_only=True)
 
         top = await asyncio.to_thread(
             self._candidate_results,

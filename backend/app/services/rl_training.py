@@ -129,10 +129,10 @@ class RlTrainingService:
         if not self.settings.uses_live_market_data:
             raise RuntimeError("RL training refuses synthetic market data; use MARKET_DATA_MODE=ccxt")
         limit = max(self.settings.rl_training_limit, self.settings.rl_min_training_candles)
-        candles = await self.history.load(db, symbol, timeframe, limit=limit, source="ccxt")
+        candles = await self.history.load(db, symbol, timeframe, limit=limit, source="ccxt", closed_only=True)
         if len(candles) < self.settings.rl_min_training_candles:
             await self.history.ingest(db, symbol, timeframe, limit=limit)
-            candles = await self.history.load(db, symbol, timeframe, limit=limit, source="ccxt")
+            candles = await self.history.load(db, symbol, timeframe, limit=limit, source="ccxt", closed_only=True)
         if len(candles) < self.settings.rl_min_training_candles:
             raise RuntimeError(
                 f"not enough real candles for RL: {len(candles)}/{self.settings.rl_min_training_candles}"

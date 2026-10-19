@@ -80,6 +80,8 @@ async def test_training_moves_cpu_bound_candidate_search_off_event_loop(monkeypa
 
     class History:
         async def load(self, *_args, **_kwargs):
+            assert _kwargs["closed_only"] is True
+            assert _kwargs["source"] == "ccxt"
             return [object()] * 2000
 
         async def ingest(self, *_args, **_kwargs):

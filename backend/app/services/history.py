@@ -84,10 +84,14 @@ class HistoricalDataService:
         timeframe: str = "1h",
         limit: int = 500,
         source: str | None = None,
+        closed_only: bool = False,
     ) -> list[Candle]:
         statement = select(Candle).where(Candle.symbol == symbol, Candle.timeframe == timeframe)
         if source:
             statement = statement.where(Candle.source == source)
+        if closed_only:
+            interval = timedelta(milliseconds=self._timeframe_milliseconds(timeframe))
+            statement = statement.where(Candle.timestamp <= datetime.now(timezone.utc) - interval)
         result = await db.execute(statement.order_by(Candle.timestamp.desc()).limit(limit))
         return list(reversed(result.scalars().all()))
 

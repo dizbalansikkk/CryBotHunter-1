@@ -160,6 +160,8 @@ async def test_optimizer_moves_cpu_bound_candidate_search_off_event_loop(monkeyp
 
     class History:
         async def load(self, *_args, **_kwargs):
+            assert _kwargs["closed_only"] is True
+            assert _kwargs["source"] == ("ccxt" if service.settings.uses_live_market_data else "synthetic")
             return [object()] * 220
 
         async def ingest(self, *_args, **_kwargs):
