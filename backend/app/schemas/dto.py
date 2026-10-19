@@ -19,6 +19,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ExchangeCredentialsIn(BaseModel):
+    exchange: Literal["binance", "bybit", "okx", "kucoin", "gateio"]
+    api_key: str = Field(min_length=1, max_length=4096)
+    secret_key: str = Field(min_length=1, max_length=4096)
+    passphrase: str | None = Field(default=None, max_length=4096)
+
+
 class SettingsIn(BaseModel):
     exchange: Literal["binance", "bybit", "okx", "kucoin", "gateio"] = "binance"
     api_key: str | None = None

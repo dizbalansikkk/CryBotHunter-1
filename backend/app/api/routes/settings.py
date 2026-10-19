@@ -1,6 +1,6 @@
 import httpx
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
 from app.db.session import get_db
 from app.models.entities import User, UserSettings
-from app.schemas.dto import ActionMessage, SettingsIn, SettingsOut
+from app.schemas.dto import ActionMessage, SettingsIn, SettingsOut, ExchangeCredentialsIn
 from app.services.exchange import ExchangeClient, exchange_error_message
 from app.services.telegram_bot import TelegramNotifier
 
@@ -25,6 +25,8 @@ async def get_user_settings(user: User = Depends(current_user), db: AsyncSession
 @router.put("", response_model=SettingsOut)
 async def update_user_settings(payload: SettingsIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> SettingsOut:
     settings = await _settings_for(user, db)
+    if settings.exchange != payload.exchange:
+        raise HTTPException(422, "Для смены биржи введи новую пару ключей и нажми «Сохранить ключи».")
     settings.exchange = payload.exchange
     settings.risk_percent = payload.risk_percent
     settings.daily_risk_percent = payload.daily_risk_percent
@@ -46,6 +48,28 @@ async def update_user_settings(payload: SettingsIn, user: User = Depends(current
         settings.secret_key_encrypted = encrypt_secret(payload.secret_key)
     if payload.passphrase:
         settings.passphrase_encrypted = encrypt_secret(payload.passphrase)
+    await db.commit()
+    await db.refresh(settings)
+    return _serialize(settings)
+
+
+@router.put("/exchange/credentials", response_model=SettingsOut)
+async def save_exchange_credentials(payload: ExchangeCredentialsIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> SettingsOut:
+    api_key, secret = payload.api_key.strip(), payload.secret_key.strip()
+    passphrase = (payload.passphrase or "").strip() or None
+    if not api_key or not secret:
+        raise HTTPException(422, "Укажи API Key и Secret Key вместе.")
+    if payload.exchange in {"okx", "kucoin"} and not passphrase:
+        raise HTTPException(422, "Для выбранной биржи требуется passphrase.")
+    # Encrypt everything before changing the saved record; never store plaintext
+    # or rotate the server encryption key as a fallback.
+    try:
+        encrypted = (encrypt_secret(api_key), encrypt_secret(secret), encrypt_secret(passphrase))
+    except (ValueError, TypeError):
+        raise HTTPException(503, "Не настроено шифрование ключей на сервере (ENCRYPTION_KEY). Ключи не сохранены.") from None
+    settings = await _settings_for(user, db)
+    settings.exchange = payload.exchange
+    settings.api_key_encrypted, settings.secret_key_encrypted, settings.passphrase_encrypted = encrypted
     await db.commit()
     await db.refresh(settings)
     return _serialize(settings)

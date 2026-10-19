@@ -1605,7 +1605,7 @@ function SettingsView() {
     breakeven_trigger_r: 1,
     breakeven_offset_percent: 0.05,
     partial_take_profit_r: 1,
-    partial_close_percent: 50
+    partial_close_percent: 25
   });
   const [message, setMessage] = React.useState<ActionMessage | null>(null);
   const [error, setError] = React.useState("");
@@ -1641,7 +1641,35 @@ function SettingsView() {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
+  async function saveCredentials() {
+    if (saving) return;
+    try {
+      setError("");
+      setMessage(null);
+      if (!settings.api_key.trim() || !settings.secret_key.trim()) {
+        setError("Укажи API Key и Secret Key вместе.");
+        return;
+      }
+      setSaving(true);
+      const { data } = await api.put<UserSettings>("/settings/exchange/credentials", {
+        exchange: settings.exchange, api_key: settings.api_key.trim(),
+        secret_key: settings.secret_key.trim(), passphrase: settings.passphrase.trim() || null
+      });
+      setSettings(current => ({ ...current, exchange: data.exchange,
+        api_key: "", secret_key: "", passphrase: "",
+        api_key_masked: data.api_key_masked ?? null,
+        secret_key_masked: data.secret_key_masked ?? null,
+        passphrase_masked: data.passphrase_masked ?? null }));
+      setMessage({ ok: true, message: "Ключи сохранены. Торговые настройки не изменены. Теперь можно проверить подключение." });
+    } catch (err) { setError(readError(err)); }
+    finally { setSaving(false); }
+  }
+
   async function save() {
+    if (settings.api_key.trim() || settings.secret_key.trim() || settings.passphrase.trim()) {
+      await saveCredentials();
+      return;
+    }
     if (saving) {
       return;
     }
@@ -1707,6 +1735,10 @@ function SettingsView() {
   }
 
   async function testExchange() {
+    if (settings.api_key.trim() || settings.secret_key.trim() || settings.passphrase.trim()) {
+      setError("Сначала сохрани введённые ключи кнопкой «Сохранить ключи».");
+      return;
+    }
     try {
       setError("");
       setMessage(null);
@@ -1732,16 +1764,17 @@ function SettingsView() {
         <div className="panel-block">
           <div className="table-title">Подключение биржи</div>
           <p className="muted">
-            Здесь подключается реальная биржа. Создай API key на выбранной бирже с доступом к торговле, вставь API Key и Secret Key, затем нажми «Сохранить».
+            Здесь подключается реальная биржа. Создай API key на выбранной бирже с доступом к торговле, вставь API Key и Secret Key, затем нажми «Сохранить ключи».
           </p>
           <Alert
             tone={settings.api_key_masked && settings.secret_key_masked ? "good" : "danger"}
-            text={settings.api_key_masked && settings.secret_key_masked ? `${exchangeLabel(settings.exchange)} подключена: ${settings.api_key_masked}` : `${exchangeLabel(settings.exchange)} еще не подключена: добавь API Key и Secret Key`}
+            text={settings.api_key_masked && settings.secret_key_masked ? `Ключи ${exchangeLabel(settings.exchange)} сохранены. Подключение проверяется отдельно.` : `${exchangeLabel(settings.exchange)} еще не подключена: добавь API Key и Secret Key`}
           />
           <label className="field">Биржа<select value={settings.exchange} onChange={(event) => update("exchange", event.target.value)}><option value="binance">Binance</option><option value="bybit">Bybit</option><option value="okx">OKX</option><option value="kucoin">KuCoin</option><option value="gateio">Gate.io</option></select></label>
           <label className="field">API Key<input type="password" value={settings.api_key} onChange={(event) => update("api_key", event.target.value)} placeholder={settings.api_key_masked ?? `Вставь API Key из ${exchangeLabel(settings.exchange)}`} /></label>
           <label className="field">Secret Key<input type="password" value={settings.secret_key} onChange={(event) => update("secret_key", event.target.value)} placeholder={settings.secret_key_masked ?? `Вставь Secret Key из ${exchangeLabel(settings.exchange)}`} /></label>
           <label className="field">Passphrase<input type="password" value={settings.passphrase} onChange={(event) => update("passphrase", event.target.value)} placeholder={settings.passphrase_masked ?? "Нужна для OKX/KuCoin, для Binance/Gate.io обычно не нужна"} /></label>
+          <button className="btn" onClick={saveCredentials} disabled={saving}>Сохранить ключи</button>
           <button className="btn" onClick={testExchange} disabled={saving}><ShieldCheck size={16} /> Проверить биржу</button>
         </div>
         <div className="panel-block">
