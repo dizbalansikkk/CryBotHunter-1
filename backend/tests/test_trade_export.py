@@ -11,6 +11,21 @@ from app.services.trade_export import TradeAuditExportService
 NOW = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)
 
 
+def test_order_export_preserves_failure_types_without_raw_credentials():
+    order = Order(id=1, symbol="ETH/USDT", side="sell", order_type="market",
+                  status="FAILED", requested_amount=0.0018,
+                  raw={"error": "OrderMinimumError", "submission_error": "TimeoutError",
+                       "recovery_error": "NetworkError", "reconciliation_required": True,
+                       "message": "sensitive exchange request", "apiKey": "secret"})
+    row = TradeAuditExportService()._order_rows([order])[0]
+    assert row["error_type"] == "OrderMinimumError"
+    assert row["submission_error"] == "TimeoutError"
+    assert row["recovery_error"] == "NetworkError"
+    assert row["reconciliation_required"] is True
+    assert "secret" not in str(row)
+    assert "sensitive exchange request" not in str(row)
+
+
 def test_trade_audit_archive_contains_full_position_decision_and_execution_history():
     position = Position(
         id=17,

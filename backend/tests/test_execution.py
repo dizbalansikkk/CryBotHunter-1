@@ -45,6 +45,27 @@ class LowBalanceExchange:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("paper", [True, False])
+async def test_exit_does_not_reconfigure_derivatives_margin_or_leverage(monkeypatch, paper):
+    class ExitExchange(LowBalanceExchange):
+        def is_derivatives_market(self):
+            return True
+
+        async def prepare_derivatives_symbol(self, symbol):
+            raise AssertionError("closing existing inventory must not configure leverage")
+
+        async def create_order(self, symbol, side, amount, order_type, **kwargs):
+            assert kwargs["reduce_only"] is True
+            return {"id": "exit", "status": "closed", "filled": amount, "average": 100}
+
+    service = ExecutionService(ExitExchange())
+    monkeypatch.setattr(service.settings, "paper_trading", paper)
+    order = await service.execute_market(Db(), "ETH/USDT", "sell", 0.1, 100, "EXIT_STOP_LOSS")
+    assert order.status == "FILLED"
+    assert order.filled_amount == 0.1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("paper,enabled,live,probe,expected", [
     (True, True, False, True, "FILLED"),
     (True, True, False, False, "FAILED"),

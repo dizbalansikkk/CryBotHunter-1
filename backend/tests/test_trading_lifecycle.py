@@ -424,6 +424,16 @@ async def test_scale_out_is_cancelled_before_an_invalid_small_tp_order_is_sent()
     assert position.entry_context["scale_out"]["mode"] == "MONOLITHIC"
     assert position.entry_context["scale_out"]["cancelled_at_stage"] == "TP1"
 
+    # Persisted fallback must also survive a new engine instance / worker cycle.
+    restarted = TradingEngine()
+    restarted.execution = SimpleNamespace()
+    db = Db()
+    for price in (100.1, 101, 105):
+        assert await restarted._apply_partial_take_profit(db, position, price) == 0
+    assert not db.items
+    assert position.volume == 0.04
+    assert not position.partial_taken
+
 
 def test_total_closed_profit_includes_partial_profit_and_entry_fee():
     position = Position(

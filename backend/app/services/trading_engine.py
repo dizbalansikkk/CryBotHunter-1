@@ -1566,7 +1566,8 @@ class TradingEngine:
         *,
         cycle_id: str | None = None,
     ) -> float:
-        if position.partial_taken or not self._partial_take_profit_reached(position, price):
+        if (self._scale_out_state(position).get("mode") == "MONOLITHIC"
+                or position.partial_taken or not self._partial_take_profit_reached(position, price)):
             return 0.0
         close_volume = self._partial_close_volume(position)
         if close_volume <= 0 or close_volume >= position.volume:
@@ -2044,6 +2045,9 @@ class TradingEngine:
                 exit_reason=reason,
                 requested_volume=requested_volume,
                 requested_price=exit_price,
+                order_id=exit_order.id,
+                error_type=(exit_order.raw or {}).get("error"),
+                reconciliation_required=bool((exit_order.raw or {}).get("reconciliation_required")),
                 order_status=exit_order.status,
                 filled_volume=exit_order.filled_amount,
             )

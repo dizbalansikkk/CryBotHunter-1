@@ -88,7 +88,7 @@ class ExecutionService:
             prepare_derivatives = getattr(self.exchange, "prepare_derivatives_symbol", None)
             venue_setup = (
                 await prepare_derivatives(symbol)
-                if is_derivatives and callable(prepare_derivatives)
+                if is_derivatives and callable(prepare_derivatives) and not reduce_only
                 else {
                     "market_type": getattr(self.exchange, "market_type", "spot"),
                     "margin_mode": None,
