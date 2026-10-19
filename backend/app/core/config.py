@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     telegram_outbox_batch_size: int = 20
     telegram_outbox_retention_days: int = 7
     telegram_daily_report_enabled: bool = True
+    telegram_trading_slices_enabled: bool = True
     telegram_daily_report_hour_utc: int = 18
     telegram_daily_report_minute_utc: int = 0
     telegram_daily_report_timezone: str = "Europe/Simferopol"

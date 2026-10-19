@@ -524,6 +524,27 @@ class TelegramPollingBot:
     ) -> None:
         if not self.settings.telegram_daily_report_enabled or session_factory is None:
             return
+        if getattr(self.settings, "telegram_trading_slices_enabled", False):
+            from app.services.trading_slice import completed_slice, build_slice, format_slice
+            current = now or datetime.now(timezone.utc)
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=timezone.utc)
+            start, end = completed_slice(current, self.settings.telegram_daily_report_timezone)
+            slot = end.isoformat()
+            if getattr(self, "last_trading_slice", None) == slot:
+                return
+            if (self.last_daily_report_attempt_at is not None
+                    and current - self.last_daily_report_attempt_at < timedelta(minutes=15)):
+                return
+            self.last_daily_report_attempt_at = current
+            try:
+                async with session_factory() as db:
+                    groups = await build_slice(db, start, end)
+                await self.notifier.broadcast(format_slice(groups, start, end), dedupe_key=f"trading-slice:{slot}")
+                self.last_trading_slice = slot
+            except Exception as exc:
+                logger.warning("Trading slice report failed error=%s", type(exc).__name__)
+            return
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)

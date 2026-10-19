@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.entities import Order, OrderStatus
+from app.models.entities import Order, OrderStatus, Position
 from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumError
 
 
@@ -53,6 +53,15 @@ class ExecutionService:
         paper_learning: bool = False,
         min_notional: float = 0.0,
     ) -> Order:
+        guarded = select(Position.id).where(
+            Position.status == "OPEN",
+            Position.entry_context["exit_failure"]["review_required"].as_boolean().is_(True),
+        )
+        if reason != "ENTRY":
+            guarded = guarded.where(Position.symbol == symbol)
+        unresolved = (await db.execute(guarded.limit(1))).scalar_one_or_none()
+        if unresolved is not None:
+            raise RuntimeError(f"Position #{unresolved} requires exit reconciliation before submitting this order")
         if not self.settings.paper_trading:
             pending = (await db.execute(select(Order.id).where(
                 Order.symbol == symbol,

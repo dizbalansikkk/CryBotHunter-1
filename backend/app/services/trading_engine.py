@@ -118,6 +118,12 @@ class TradingEngine:
 
     async def run_once(self, db: AsyncSession, settings: RiskSettings, timeframe: str = "1h") -> TradingRunOut:
         cycle_id = uuid4().hex[:10]
+        unresolved_exit = (await db.execute(select(Position.id).where(
+            Position.status == "OPEN",
+            Position.entry_context["exit_failure"]["review_required"].as_boolean().is_(True),
+        ).limit(1))).scalar_one_or_none()
+        if unresolved_exit is not None:
+            return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
         if not self.settings.paper_trading and self.settings.live_trading_enabled and self.exchange.is_derivatives_market():
             from app.services.inventory_reconciliation import check_inventory
             differences = await check_inventory(db, self.exchange)
@@ -661,6 +667,8 @@ class TradingEngine:
             }
         previous_prices: dict[int, float] = {}
         for position in positions:
+            if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+                await self._review_failed_exit(db, position)
             price = prices.get(position.symbol, 0.0)
             if price <= 0:
                 self._log_trading_event(
@@ -688,6 +696,8 @@ class TradingEngine:
         updates: list[PositionUpdateOut] = []
 
         for position in positions:
+            if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+                continue
             price = prices.get(position.symbol, 0.0)
             if price <= 0:
                 continue
@@ -732,6 +742,8 @@ class TradingEngine:
             else:
                 stop_before_updates = position.stop
                 first_partial_volume = await self._apply_partial_take_profit(db, position, price, cycle_id=cycle_id)
+                if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+                    continue
                 # The stop is protected only after the exchange confirms TP1.
                 # A price merely touching its trigger is not an execution event.
                 if first_partial_volume and self._apply_breakeven(position):
@@ -770,6 +782,8 @@ class TradingEngine:
                     cycle_id=cycle_id,
                 )
                 partial_closed_volume = first_partial_volume or second_partial_volume
+                if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+                    continue
                 self._apply_trailing_stop(position)
                 if first_partial_volume or second_partial_volume or position.stop != stop_before_updates:
                     await self._replace_protective_stop(
@@ -1119,6 +1133,13 @@ class TradingEngine:
         if volume <= 0:
             return None
         pre_entry_sizing = self._entry_sizing(coin, signal, balance, settings)
+        preflight_plan = await self._assess_scale_out_plan(
+            coin.symbol, self._initial_scale_out_plan(
+                side=side, entry_price=coin.price, strategy_take=take,
+                entry_volume=volume, entry_fee=volume * coin.price * self.settings.paper_fee_rate,
+                tp1_percent=settings.partial_close_percent,
+            ),
+        )
         entry_order = await self.execution.execute_market(
             db,
             coin.symbol,
@@ -1222,13 +1243,19 @@ class TradingEngine:
                 "take_distance_percent": round(abs(take - entry_price) / entry_price * 100, 4),
             }
         )
-        entry_context["scale_out"] = self._initial_scale_out_plan(
+        entry_context["exit_preflight"] = preflight_plan
+        actual_plan = self._initial_scale_out_plan(
             side=side,
             entry_price=entry_price,
             strategy_take=take,
             entry_volume=volume,
             entry_fee=entry_order.fee,
             tp1_percent=settings.partial_close_percent,
+        )
+        entry_context["scale_out"] = (
+            {**actual_plan, "mode": "MONOLITHIC", "preflight": preflight_plan.get("preflight")}
+            if preflight_plan["mode"] == "MONOLITHIC"
+            else await self._assess_scale_out_plan(coin.symbol, actual_plan)
         )
         position = Position(
             symbol=coin.symbol,
@@ -1566,6 +1593,8 @@ class TradingEngine:
         *,
         cycle_id: str | None = None,
     ) -> float:
+        if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+            return 0.0
         if (self._scale_out_state(position).get("mode") == "MONOLITHIC"
                 or position.partial_taken or not self._partial_take_profit_reached(position, price)):
             return 0.0
@@ -1594,7 +1623,9 @@ class TradingEngine:
         if (
             exit_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
             or not exit_order.average_price
+            or bool((exit_order.raw or {}).get("reconciliation_required"))
         ):
+            await self._hold_failed_exit(db, position, exit_order, "_apply_partial_take_profit")
             self._log_trading_event(
                 db,
                 "ERROR",
@@ -1620,6 +1651,7 @@ class TradingEngine:
             mark_price=price,
         )
         if closed_volume <= 0:
+            await self._hold_failed_exit(db, position, exit_order, "_apply_partial_take_profit")
             self._log_trading_event(
                 db,
                 "ERROR",
@@ -1674,6 +1706,8 @@ class TradingEngine:
         cycle_id: str | None = None,
     ) -> float:
         """Execute TP2 only after a filled TP1 and a confirmed scale-out plan."""
+        if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+            return 0.0
         scale_out = self._scale_out_state(position)
         if (
             not position.partial_taken
@@ -1704,7 +1738,9 @@ class TradingEngine:
             price,
             "PARTIAL_TAKE_PROFIT_2",
         )
-        if exit_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not exit_order.average_price:
+        if (exit_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
+                or not exit_order.average_price or (exit_order.raw or {}).get("reconciliation_required")):
+            await self._hold_failed_exit(db, position, exit_order, "_apply_second_take_profit")
             self._log_trading_event(
                 db,
                 "ERROR",
@@ -1729,6 +1765,7 @@ class TradingEngine:
             mark_price=price,
         )
         if closed_volume <= 0:
+            await self._hold_failed_exit(db, position, exit_order, "TP2_NO_EXECUTED_VOLUME")
             return 0.0
         self._mark_scale_out_taken(position, "tp2", exit_order.average_price, closed_volume)
         self._log_trading_event(
@@ -1798,6 +1835,8 @@ class TradingEngine:
         The outcome is deliberately tri-state: a submitted but unresolved partial
         order must not be followed by a second full-close order in the same cycle.
         """
+        if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+            return "PENDING"
         if not getattr(self.settings, "dynamic_take_profit_enabled", True):
             return "CLOSE"
         state = self._dynamic_take_state(position)
@@ -1834,7 +1873,9 @@ class TradingEngine:
         if (
             exit_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
             or not exit_order.average_price
+            or bool((exit_order.raw or {}).get("reconciliation_required"))
         ):
+            await self._hold_failed_exit(db, position, exit_order, "_handle_dynamic_take_profit")
             self._log_trading_event(
                 db,
                 "ERROR",
@@ -1861,6 +1902,7 @@ class TradingEngine:
             mark_price=price,
         )
         if closed_volume <= 0:
+            await self._hold_failed_exit(db, position, exit_order, "_handle_dynamic_take_profit")
             self._log_trading_event(
                 db,
                 "ERROR",
@@ -2017,6 +2059,9 @@ class TradingEngine:
         cycle_id: str | None = None,
         exit_order: Order | None = None,
     ) -> None:
+        if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
+            await self._review_failed_exit(db, position)
+            return
         requested_volume = position.volume
         if exit_order is None:
             exit_order = await self._cancel_active_protective_stop(db, position, cycle_id=cycle_id)
@@ -2032,43 +2077,13 @@ class TradingEngine:
         if (
             exit_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
             or not exit_order.average_price
+            or bool((exit_order.raw or {}).get("reconciliation_required"))
         ):
-            self._log_trading_event(
-                db,
-                "ERROR",
-                "POSITION_CLOSE_FAILED",
-                f"Failed to close {position.symbol} #{position.id}: {reason}",
-                cycle_id=cycle_id,
-                symbol=position.symbol,
-                position_id=position.id,
-                side=position.side,
-                exit_reason=reason,
-                requested_volume=requested_volume,
-                requested_price=exit_price,
-                order_id=exit_order.id,
-                error_type=(exit_order.raw or {}).get("error"),
-                reconciliation_required=bool((exit_order.raw or {}).get("reconciliation_required")),
-                order_status=exit_order.status,
-                filled_volume=exit_order.filled_amount,
-            )
+            await self._hold_failed_exit(db, position, exit_order, reason)
             return
         closed_volume = self._executed_volume(exit_order.filled_amount, requested_volume)
         if closed_volume <= 0:
-            self._log_trading_event(
-                db,
-                "ERROR",
-                "POSITION_CLOSE_FAILED",
-                f"Failed to close {position.symbol} #{position.id}: {reason}, no executed volume",
-                cycle_id=cycle_id,
-                symbol=position.symbol,
-                position_id=position.id,
-                side=position.side,
-                exit_reason=reason,
-                requested_volume=requested_volume,
-                requested_price=exit_price,
-                order_status=exit_order.status,
-                filled_volume=exit_order.filled_amount,
-            )
+            await self._hold_failed_exit(db, position, exit_order, reason)
             return
         if closed_volume < requested_volume * 0.999999:
             closed_volume, partial_profit = await self._record_partial_exit(
@@ -2603,6 +2618,83 @@ class TradingEngine:
                 position_id=position.id,
                 order_id=order.id,
             )
+
+    async def _hold_failed_exit(self, db, position, order, reason):
+        context = dict(position.entry_context or {})
+        if context.get("exit_failure", {}).get("review_required"):
+            return
+        error = str((order.raw or {}).get("error") or (order.raw or {}).get("submission_error") or order.status)
+        context["exit_failure"] = {"review_required": True, "order_id": order.id,
+            "reason": reason, "error_type": error, "failed_at": datetime.now(timezone.utc).isoformat()}
+        position.entry_context = context
+        from app.services.trading_slice import position_lane
+        self._log_trading_event(db, "ERROR", "POSITION_CLOSE_FAILED",
+            f"Exit requires review for {position.symbol} #{position.id}: {error}",
+            position_id=position.id, symbol=position.symbol, order_id=order.id,
+            error_type=error, exit_reason=reason, lane=position_lane(position),
+            filled_volume=order.filled_amount, order_status=order.status,
+            requested_volume=position.volume, requested_price=order.requested_price,
+            reconciliation_required=bool((order.raw or {}).get("reconciliation_required")))
+        # Durable DB guard survives Redis loss and prevents duplicate exit submission.
+        await db.commit()
+        await self.control.panic(f"exit_review_required:{position.id}")
+        await self._review_failed_exit(db, position)
+        from html import escape
+        await self.telegram.broadcast(
+            f"Закрытие позиции #{position.id} {escape(position.symbol)} не подтверждено. "
+            f"Причина: {escape(error)}. Новые входы остановлены. Повторный выход заблокирован "
+            "до сверки ордера и позиции; требуется проверка исполнения.",
+            dedupe_key=f"exit-failure:{position.id}:{order.id}",
+        )
+
+    async def _review_failed_exit(self, db, position):
+        context = dict(position.entry_context or {})
+        state = dict(context.get("exit_failure") or {})
+        now = datetime.now(timezone.utc)
+        if state.get("checked_at") and now - datetime.fromisoformat(state["checked_at"]) < timedelta(minutes=5):
+            return
+        state["checked_at"] = now.isoformat()
+        if not self.settings.paper_trading:
+            order = await db.get(Order, state.get("order_id"))
+            try:
+                if order and order.exchange_order_id:
+                    snapshot = await self.exchange.fetch_order(order.exchange_order_id, position.symbol)
+                elif order and (order.raw or {}).get("client_order_id"):
+                    snapshot = await self.exchange.fetch_order_by_client_id(order.raw["client_order_id"], position.symbol)
+                else:
+                    snapshot = {"status": "not_submitted_or_unknown"}
+                state["venue_order"] = {key: snapshot.get(key) for key in ("id", "status", "filled", "average")}
+            except Exception as exc:
+                state["check_error"] = type(exc).__name__
+            from app.services.inventory_reconciliation import check_inventory
+            state["inventory_differences"] = await check_inventory(db, self.exchange)
+        else:
+            state["check_result"] = "paper_exit_requires_review"
+        context["exit_failure"] = state
+        position.entry_context = context
+
+    async def _assess_scale_out_plan(self, symbol, plan):
+        plan = dict(plan)
+        total = plan["entry_volume"]
+        remaining = total
+        checks = []
+        for stage, amount, price in (
+            ("TP1", total * plan["tp1_percent"] / 100, plan["tp1_price"]),
+            ("TP2", total * plan["tp2_percent"] / 100, plan["tp2_price"]),
+            ("REMAINDER", None, plan["tp3_price"]),
+        ):
+            requested = round(remaining if amount is None else amount, 8)
+            assessment = await self.execution.assess_exit_size(symbol, requested, price)
+            allowed = assessment.allowed and 0 < assessment.amount <= requested + 1e-10
+            checks.append({"stage": stage, "requested_volume": requested,
+                "normalized_volume": assessment.amount, "allowed": allowed,
+                "reason": assessment.reason, "minimum_notional": assessment.minimum_notional})
+            if not allowed:
+                plan["mode"] = "MONOLITHIC"
+                break
+            remaining = round(remaining - assessment.amount, 8)
+        plan["preflight"] = checks
+        return plan
 
     def _initial_scale_out_plan(
         self,

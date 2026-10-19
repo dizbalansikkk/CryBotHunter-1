@@ -866,7 +866,9 @@ async def test_tp1_journal_contains_only_actual_execution_once(monkeypatch, stat
         return kw["exit_volume"], 0.24
     monkeypatch.setattr(engine, "_record_partial_exit", record)
     items = []
-    db = SimpleNamespace(add=items.append)
+    db = SimpleNamespace(add=items.append, commit=AsyncMock())
+    engine.control.panic = AsyncMock(return_value=True)
+    engine.telegram.broadcast = AsyncMock()
     await engine._apply_partial_take_profit(db, position, 101)
     fills = [item for item in items if item.context["event"] == "POSITION_PARTIALLY_CLOSED"]
     assert len(fills) == int(confirmed)
