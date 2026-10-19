@@ -406,6 +406,13 @@ class TradingEngine:
                 reason = f"{reason}; {exposure_reason}" if exposure_allowed else exposure_reason
             else:
                 candidate_notional = 0.0
+            if accepted:
+                cost_sizing = self._entry_sizing(coin, signal.signal, balance, trade_settings)
+                cost_scenario = cost_sizing.get("cost_scenario", {})
+                if cost_scenario.get("available") and cost_scenario["net_target_before_funding"] <= 0:
+                    accepted = False
+                    reason = ("after-cost target blocked: estimated round-trip costs consume final-target profit; "
+                              f"net={cost_scenario['net_target_before_funding']:.6f} USDT")
             if accepted and not exploration:
                 timeframe_candles = await self._capture_advanced_timeframes(coin.symbol)
                 committee = await self._committee_gate(
@@ -835,7 +842,12 @@ class TradingEngine:
                 min_notional=self._minimum_entry_notional(), max_risk_percent=settings.max_risk_percent_per_trade)
             leverage = min(self.settings.futures_leverage, self.settings.futures_max_leverage) if self.exchange.is_derivatives_market() else 1
             notional = volume * coin.price
-            return {"available": volume > 0, "notional": round(notional, 6), "volume": volume,
+            from app.services.trade_costs import estimate_costs
+            costs = estimate_costs(price=coin.price, stop=stop, take=take, volume=volume,
+                fee_rate=self.settings.paper_fee_rate, spread_bps=coin.spread_bps,
+                slippage_bps=max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps),
+                funding_rate=coin.funding_rate if self.exchange.is_derivatives_market() else 0.0)
+            return {"available": volume > 0, "cost_scenario": costs, "notional": round(notional, 6), "volume": volume,
                 "estimated_margin": round(notional / max(leverage, 1), 6), "leverage": leverage,
                 "stop_risk": round(abs(coin.price - stop) * volume, 6), "stop": stop, "take": take,
                 "estimated_entry_fee": round(notional * self.settings.paper_fee_rate, 6) if self.settings.paper_trading else None,
@@ -878,13 +890,19 @@ class TradingEngine:
     def _fill_audit(self, order: Order, stage: str) -> dict:
         """Execution evidence, shared by partial and final exit journal events."""
         executed_at = order.updated_at or datetime.now(timezone.utc)
+        confirmed = (order.status in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value}
+                     and self._finite_float(order.filled_amount) > 0
+                     and self._finite_float(order.average_price) > 0)
         return {
-            "stage": stage, "fill_confirmed": True,
+            "stage": stage, "fill_confirmed": confirmed,
+            "confirmed_fill_volume": self._finite_float(order.filled_amount),
+            "fill_price": self._finite_float(order.average_price),
+            "fee": self._finite_float(order.fee),
             "mode": "PAPER" if getattr(self.settings, "paper_trading", False) else "LIVE",
             "order_id": order.id, "exchange_order_id": order.exchange_order_id,
             "order_status": order.status,
-            "execution_status": "FILL_CONFIRMED",
-            "executed_at": executed_at.isoformat(),
+            "execution_status": "FILL_CONFIRMED" if confirmed else "UNCONFIRMED",
+            "executed_at": executed_at.isoformat() if confirmed else None,
             "execution_time_source": "ORDER_ACKNOWLEDGED_AT",
         }
 
@@ -904,6 +922,7 @@ class TradingEngine:
     def _decision_gate(self, reason: str) -> str:
         normalized = (reason or "").lower()
         rules = (
+            ("after-cost target", "TRANSACTION_COSTS"),
             ("symbol performance guard", "SYMBOL_GUARD"),
             ("symbol recovery probe", "SYMBOL_GUARD"),
             ("performance guard", "PERFORMANCE_GUARD"),
