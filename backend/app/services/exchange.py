@@ -368,6 +368,13 @@ class ExchangeClient:
         venue_symbol = await asyncio.to_thread(self._loaded_market_symbol, client, symbol)
         return await asyncio.to_thread(client.fetch_order, order_id, venue_symbol)
 
+    async def fetch_live_positions(self) -> list[dict[str, Any]]:
+        if self.settings.paper_trading or not self.settings.live_trading_enabled:
+            raise RuntimeError("Live position reconciliation is disabled in Paper mode")
+        self._assert_live_safety()
+        client = self._client(authenticated=True)
+        return await asyncio.to_thread(client.fetch_positions)
+
     async def fetch_order_by_client_id(self, client_order_id: str, symbol: str) -> dict[str, Any]:
         if self.exchange != "binance" or self.settings.paper_trading or not self.settings.live_trading_enabled:
             raise RuntimeError("Client-ID recovery requires live Binance")

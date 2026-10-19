@@ -118,6 +118,18 @@ class TradingEngine:
 
     async def run_once(self, db: AsyncSession, settings: RiskSettings, timeframe: str = "1h") -> TradingRunOut:
         cycle_id = uuid4().hex[:10]
+        if not self.settings.paper_trading and self.settings.live_trading_enabled and self.exchange.is_derivatives_market():
+            from app.services.inventory_reconciliation import check_inventory
+            differences = await check_inventory(db, self.exchange)
+            if differences:
+                reason = "inventory_reconciliation_required"
+                _, prior_reason = await self.control.is_paused()
+                await self.control.panic(reason)
+                if prior_reason != reason:
+                    self._log_trading_event(db, "ERROR", "INVENTORY_RECONCILIATION_REQUIRED",
+                        "New entries blocked until venue and local positions match", differences=differences)
+                await db.commit()
+                return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
         balance = (await self.exchange.get_balance()).get("USDT", settings.balance)
         settings = self._settings_with_balance(settings, balance)
         drawdown = await self._enforce_drawdown_limit(db, settings.balance)
@@ -2006,7 +2018,8 @@ class TradingEngine:
     ) -> None:
         requested_volume = position.volume
         if exit_order is None:
-            await self._cancel_active_protective_stop(db, position, cycle_id=cycle_id)
+            exit_order = await self._cancel_active_protective_stop(db, position, cycle_id=cycle_id)
+        if exit_order is None:
             exit_order = await self.execution.execute_market(
                 db,
                 position.symbol,
@@ -2535,7 +2548,7 @@ class TradingEngine:
         position: Position,
         *,
         cycle_id: str | None,
-    ) -> None:
+    ) -> Order | None:
         order = await self._active_protective_stop(db, position)
         if not order or order.status != OrderStatus.NEW.value:
             return
@@ -2551,6 +2564,8 @@ class TradingEngine:
                 order_id=order.id,
             )
         else:
+            if order.status in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} and order.average_price and order.filled_amount:
+                return order
             # All native stops created by this engine are reduce-only.  A
             # failed cancellation therefore cannot reverse a final close, but
             # it must remain visible for reconciliation and audit.

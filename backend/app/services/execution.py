@@ -288,12 +288,15 @@ class ExecutionService:
                 raise RuntimeError("Native protective stop is not safe for the configured exchange/market type.")
             prepared_order = await self.exchange.prepare_order(symbol, amount, stop_price)
             order.requested_amount = prepared_order.amount
+            client_id = self._client_order_id(order.id, f"PROTECTIVE_{stage}")
+            order.raw = {**order.raw, "client_order_id": client_id, "reconciliation_required": True}
+            await db.commit()
             raw = await self.exchange.create_protective_stop_order(
                 symbol,
                 side,
                 prepared_order.amount,
                 stop_price,
-                client_order_id=self._client_order_id(order.id, f"PROTECTIVE_{stage}"),
+                client_order_id=client_id,
             )
             exchange_order_id = str(raw.get("id") or "")
             if not exchange_order_id:
@@ -310,11 +313,15 @@ class ExecutionService:
                 },
                 "exchange_response": raw,
                 "acknowledged": True,
+                "reconciliation_required": False,
             }
         except Exception as exc:
-            order.status = OrderStatus.FAILED.value
+            uncertain = bool((order.raw or {}).get("reconciliation_required")) and not isinstance(
+                exc, (ccxt.InvalidOrder, ccxt.InsufficientFunds, ccxt.AuthenticationError, ccxt.PermissionDenied))
+            order.status = OrderStatus.NEW.value if uncertain else OrderStatus.FAILED.value
             order.raw = {
                 **(order.raw or {}),
+                "reconciliation_required": uncertain,
                 "error": exc.__class__.__name__,
                 "message": str(exc),
                 "acknowledged": False,
@@ -334,6 +341,14 @@ class ExecutionService:
                 "cancel_message": str(exc),
             }
             order.updated_at = datetime.now(timezone.utc)
+            return False
+        status = str(raw.get("status") or "").lower()
+        if self._positive_float(raw.get("filled")) > 0:
+            self._apply_live_result(order, raw)
+            order.raw = {**(order.raw or {}), "cancel_response": raw, "cancel_raced_with_fill": True}
+            return False
+        if status not in {"canceled", "cancelled"}:
+            order.raw = {**(order.raw or {}), "cancel_response": raw, "cancel_unconfirmed": True}
             return False
         order.status = OrderStatus.CANCELLED.value
         order.raw = {**(order.raw or {}), "cancel_response": raw, "cancelled_by_engine": True}

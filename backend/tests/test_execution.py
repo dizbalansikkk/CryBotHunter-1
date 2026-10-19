@@ -374,3 +374,35 @@ def test_partial_fill_is_not_lost_when_order_is_open_or_cancelled(status):
     assert order.status == 'PARTIAL'
     assert order.filled_amount == .2
     assert service._positive_float(float('inf')) == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_timeout_keeps_persisted_unknown_intent(monkeypatch):
+    import ccxt
+    class Exchange(ProtectiveStopExchange):
+        async def create_protective_stop_order(self, *args, **kwargs):
+            raise ccxt.RequestTimeout('lost response')
+    service = ExecutionService(Exchange())
+    monkeypatch.setattr(service.settings, 'paper_trading', False)
+    order = await service.place_protective_stop(Db(), position_id=3, symbol='ETH/USDT',
+        side='sell', amount=1, stop_price=90, stage='INITIAL')
+    assert order.status == 'NEW'
+    assert order.raw['reconciliation_required'] is True
+    assert order.raw['acknowledged'] is False
+    assert order.raw['client_order_id']
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,filled', [('open',0), ('closed',1), ('canceled',.2)])
+async def test_stop_cancel_requires_cancellation_and_preserves_racing_fill(status, filled):
+    from app.models.entities import Order
+    class Exchange:
+        async def cancel_order(self, *args):
+            return {'status':status, 'filled':filled, 'average':100 if filled else None}
+    service=ExecutionService(Exchange())
+    order=Order(status='NEW', exchange_order_id='venue1', requested_amount=1, symbol='ETH/USDT', raw={})
+    assert await service.cancel_protective_stop(order) is False
+    if filled:
+        assert order.filled_amount == filled
+        assert order.status in {'FILLED','PARTIAL'}
+    else:
+        assert order.status == 'NEW'
