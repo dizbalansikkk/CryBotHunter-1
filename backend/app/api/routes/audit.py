@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,12 @@ from app.services.control_dashboard import ControlDashboardService
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
+
+
+@router.get("/control/requests")
+async def control_requests(_: User = Depends(current_user)):
+    from app.services.request_diagnostics import request_diagnostics
+    return await asyncio.to_thread(request_diagnostics)
 
 
 @router.get("/control/entries")

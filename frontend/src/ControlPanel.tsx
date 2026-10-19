@@ -63,10 +63,26 @@ export default function ControlPanel() {
   }, [tab, refresh]);
   return <section className="space-y-4">
     <div className="panel-block"><h2 className="table-title">Контроль торговли</h2>
-      <div className="flex flex-wrap gap-2">{[["entries", "Почему нет сделки"], ["positions", "Суммы и история"], ["learning", "Что изменилось"], ["models", "Проверка моделей"], ["storage", "Память базы"]].map(([key, label]) => <button key={key} className={`btn ${tab === key ? "primary" : ""}`} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
+      <div className="flex flex-wrap gap-2">{[["requests", "Запросы и Binance"], ["entries", "Почему нет сделки"], ["positions", "Суммы и история"], ["learning", "Что изменилось"], ["models", "Проверка моделей"], ["storage", "Память базы"]].map(([key, label]) => <button key={key} className={`btn ${tab === key ? "primary" : ""}`} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
       <button className="btn" disabled={busy} onClick={() => setRefresh(v => v + 1)}>{busy ? "Загрузка…" : "Обновить"}</button></div>
       {error && <p role="alert" className="mt-3 text-danger">{error}</p>}
     </div>
+    {data && tab === "requests" && <div className="panel-block space-y-3">
+      <h3 className="table-title">Запросы и Binance</h3>
+      <p>Срез на {time(data.generated_at)}. Обновляется кнопкой «Обновить», без запросов к бирже.</p>
+      <p>{data.note}</p>
+      {!data.available ? <p role="alert">{data.reason}</p> : <>
+        <p>Расход: {number(data.used_weight)} единиц веса за минуту. Бюджет публичных запросов: {number(data.public_budget)}, общий: {number(data.total_budget)}.</p>
+        <p>Остаток для публичных запросов: {number(data.public_remaining)}; общий остаток: {number(data.total_remaining)}.</p>
+        <p>{data.cooldown_until ? `Пауза Binance до ${time(data.cooldown_until)} (UTC+3); на момент среза осталось ${number(data.cooldown_seconds)} сек.` : "Активной сохранённой паузы Binance нет. Это не проверка доступности биржи."}</p>
+        <p>WebSocket: {data.stream_enabled ? "включён в настройках" : "отключён в настройках"}.</p>
+        <Table rows={data.streams} columns={[
+          {key:"name",label:"Поток",render:r=>r.name === "ticker" ? "Цены" : "Стакан"},
+          {key:"fresh",label:"Активность",render:r=>r.fresh ? "События поступают" : "Нет свежего подтверждения"},
+          money("age_seconds","Секунд после последнего события")
+        ]}/>
+      </>}
+    </div>}
     {data && tab === "entries" && <>
       <p>Последнее решение по каждой монете за 24 часа · получено {time(data.generated_at)}. Автообновление раз в минуту. Старый результат не означает текущий сигнал.</p>
       <Table rows={data.entries} columns={[
