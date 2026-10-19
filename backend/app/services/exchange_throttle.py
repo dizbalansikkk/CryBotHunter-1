@@ -11,7 +11,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
-from app.services.request_budget import request_policy, reserve_request
+from app.services.request_budget import request_policy, reserve_request, LocalRequestDeferred, ExchangeCooldownActive
 
 
 @lru_cache(maxsize=1)
@@ -46,7 +46,7 @@ def install_binance_guard(client):
             # Do not resume independently when the shared coordination is down.
             raise ccxt.ExchangeNotAvailable("Binance request coordination unavailable") from exc
         if deadline > now:
-            raise ccxt.RateLimitExceeded(f"Binance cooldown active until {int(deadline * 1000)}; no HTTP request sent")
+            raise ExchangeCooldownActive(deadline, now)
         # Share public responses, never private balances or order responses.
         cache_key = None
         _, ttl, _ = request_policy(url, method, headers)
@@ -61,7 +61,7 @@ def install_binance_guard(client):
             lock_key = cache_key + ':loading' if cache_key else None
             token = str(time.time_ns())
             if lock_key and not store.set(lock_key, token, nx=True, ex=60):
-                raise ccxt.RateLimitExceeded('Shared Binance data fetch in progress; no HTTP request sent')
+                raise LocalRequestDeferred('Shared Binance data fetch in progress; no HTTP request sent', retry_seconds=5)
         except RedisError as exc:
             raise ccxt.ExchangeNotAvailable("Binance request coordination unavailable") from exc
         try:

@@ -3,6 +3,7 @@ import logging
 from contextlib import suppress
 
 import ccxt
+from app.services.request_budget import LocalRequestDeferred, ExchangeCooldownActive
 
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
@@ -65,6 +66,13 @@ async def main() -> None:
                                 {"stage": "replica_wait", "reason": "lock_owned_by_another_replica"},
                             )
                 delay = settings.candle_ingest_loop_seconds
+            except ExchangeCooldownActive as exc:
+                delay = max(settings.candle_ingest_loop_seconds, min(exc.retry_seconds, 300))
+                await heartbeat.set_status("DEGRADED", {"reason": "exchange_cooldown",
+                    "cooldown_until": exc.deadline, "retry_seconds": exc.retry_seconds})
+            except LocalRequestDeferred as exc:
+                delay = max(settings.candle_ingest_loop_seconds, exc.retry_seconds)
+                await heartbeat.set_status("DEGRADED", {"reason": "local_request_budget", "retry_seconds": delay})
             except (ccxt.RateLimitExceeded, ccxt.DDoSProtection):
                 delay = _next_rate_limit_delay(delay, settings.candle_ingest_loop_seconds)
                 logger.warning("Достигнут лимит запросов Binance; загрузка свечей будет повторена через %s сек.", delay)

@@ -111,3 +111,31 @@ def test_cache_coordination_failure_sends_no_http(monkeypatch):
     throttle.install_binance_guard(client)
     with pytest.raises(ccxt.ExchangeNotAvailable):
         client.fetch('https://fapi.binance.com/fapi/v1/klines')
+
+
+def test_active_cooldown_preserves_deadline_and_is_not_new_http_error(monkeypatch):
+    from app.services.request_budget import ExchangeCooldownActive
+    from app.services.exchange import exchange_error_message
+    store = Store()
+    store.values['binance:cooldown:until'] = 1792398841.974
+    monkeypatch.setattr(throttle, 'shared_store', lambda: store)
+    monkeypatch.setattr(throttle.time, 'time', lambda: 1792395000)
+    client = SimpleNamespace(fetch=lambda *args: pytest.fail('No HTTP during ban'))
+    throttle.install_binance_guard(client)
+    for _ in range(2):
+        with pytest.raises(ExchangeCooldownActive) as caught:
+            client.fetch('https://fapi.binance.com/fapi/v1/time')
+        assert caught.value.deadline == 1792398841.974
+        assert caught.value.retry_seconds == 3842
+    assert store.values['binance:cooldown:until'] == 1792398841.974
+    message = exchange_error_message(caught.value, 'binance', 'future', True)
+    assert '19.10.2026 11:34:01' in message
+    assert 'не новая блокировка' in message
+
+
+def test_local_deferral_has_distinct_message():
+    from app.services.request_budget import LocalRequestDeferred
+    from app.services.exchange import exchange_error_message
+    message = exchange_error_message(LocalRequestDeferred('budget'), 'binance', 'future', True)
+    assert 'Локальная пауза' in message
+    assert '60' in message

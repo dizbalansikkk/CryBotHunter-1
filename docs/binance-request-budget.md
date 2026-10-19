@@ -38,3 +38,30 @@ confirmed ticker and partial-depth events on both routed URLs. Production stream
 health is stored in Redis under `binance:usdt:public:stream:health:market` and
 `binance:usdt:public:stream:health:public` (60-second TTL). An HTTP health check alone
 does not confirm that the collector is receiving events.
+
+
+## Distinguishing admission pauses from venue bans
+
+LocalRequestDeferred means no upstream call was made because the shared local
+budget or cache-miss lock was busy. Trader/candle workers expose this in their
+heartbeat and retry on the normal cadence (at least 60s for budget exhaustion,
+5s for a cache-miss lock). They do not announce a venue outage or exponentially
+back off solely for this local condition.
+
+ExchangeCooldownActive means a previously received venue error established a
+shared deadline. It never extends that deadline and makes no HTTP request.
+User messages render the exact expiry in UTC+3. Workers retain a degraded
+heartbeat without repeatedly broadcasting the same ban. Original venue errors
+continue to be reported through the incident tracker. A deployment does not
+clear an active ban.
+
+Reconciliation no longer selects historical FILLED orders on every cycle;
+terminal partial fills with a recorded venue response are also skipped unless
+explicitly marked for reconciliation. Pending protective stops remain eligible.
+Exchange connection diagnostics no longer issue a second unbudgeted Binance spot
+time request. The authenticated connection test uses the guarded client.
+
+Validation: 435 tests passed, including unchanged cooldown expiry on repeated
+attempts, distinct local-pause messages, and no repeated terminal-order reads.
+The original request that triggered a production ban cannot be identified from
+a cooldown-only message; upstream logs and shared-IP usage remain relevant.

@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import ccxt
+from app.services.request_budget import LocalRequestDeferred, ExchangeCooldownActive
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -180,6 +181,15 @@ async def main() -> None:
                                         photo_caption="<b>Визуальная сводка торгового цикла</b>",
                                     )
                                     last_cycle_report_at = datetime.now(timezone.utc)
+        except ExchangeCooldownActive as exc:
+            delay = max(settings.trader_loop_seconds, min(exc.retry_seconds, 300))
+            await heartbeat.set_status("DEGRADED", {"reason": "exchange_cooldown",
+                "cooldown_until": exc.deadline, "retry_seconds": exc.retry_seconds})
+        except LocalRequestDeferred as exc:
+            # Expected scheduling, not an exchange outage. Keep heartbeat visible
+            # without Telegram errors or the five-minute outage backoff.
+            delay = max(settings.trader_loop_seconds, exc.retry_seconds)
+            await heartbeat.set_status("DEGRADED", {"reason": "local_request_budget", "retry_seconds": delay})
         except ccxt.BaseError as exc:
             message = exchange_error_message(
                 exc,

@@ -35,3 +35,20 @@ async def test_unknown_submission_is_not_marked_failed_after_timeout():
     assert order.exchange_order_id == 'venue-7'
     assert order.raw['reconciliation_required'] is True
     assert order.raw['reconciliation'] == 'inventory_review_required'
+
+
+@pytest.mark.asyncio
+async def test_terminal_orders_do_not_consume_repeated_exchange_requests():
+    from unittest.mock import AsyncMock
+    exchange=SimpleNamespace(fetch_order=AsyncMock())
+    rows=[Order(id=1,status='PARTIAL', exchange_order_id='old', raw={'exchange_response':{'status':'closed'}})]
+    captured=[]
+    class Db:
+        async def execute(self, query):
+            from sqlalchemy.dialects import postgresql
+            captured.append(str(query.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds':True})))
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda:rows))
+        async def commit(self): pass
+    await OrderReconciliationService(exchange).reconcile(Db())
+    exchange.fetch_order.assert_not_awaited()
+    assert "'FILLED'" not in captured[0]

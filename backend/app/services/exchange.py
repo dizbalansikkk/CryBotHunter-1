@@ -11,6 +11,15 @@ from app.models.entities import UserSettings
 
 
 def exchange_error_message(exc: Exception, exchange: str, market_type: str, sandbox: bool) -> str:
+    from app.services.request_budget import LocalRequestDeferred, ExchangeCooldownActive
+    if isinstance(exc, ExchangeCooldownActive):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        until = datetime.fromtimestamp(exc.deadline, ZoneInfo("Europe/Simferopol")).strftime("%d.%m.%Y %H:%M:%S")
+        return (f"Действует ранее установленная пауза Binance до {until} (UTC+3). "
+                "Новый запрос не отправлен. Бот повторит проверку после окончания паузы; это не новая блокировка.")
+    if isinstance(exc, LocalRequestDeferred):
+        return f"Локальная пауза запросов бота, не блокировка биржи. Повтори через {exc.retry_seconds} сек."
     mode = "sandbox" if sandbox else "real"
     suffix = f"Exchange={exchange}, market={market_type}, mode={mode}."
     detail = _safe_error_detail(exc)

@@ -4,6 +4,21 @@ import time
 import ccxt
 
 
+class LocalRequestDeferred(ccxt.RateLimitExceeded):
+    """Local admission pause, not a response from the exchange."""
+    def __init__(self, message, retry_seconds=60):
+        super().__init__(message)
+        self.retry_seconds = retry_seconds
+
+
+class ExchangeCooldownActive(ccxt.RateLimitExceeded):
+    """A previously recorded exchange cooldown; no new HTTP request was made."""
+    def __init__(self, deadline, now):
+        super().__init__(f"Binance cooldown active until {int(deadline * 1000)}; no HTTP request sent")
+        self.deadline = deadline
+        self.retry_seconds = max(int(deadline - now) + 1, 1)
+
+
 RESERVE = """
 local now = tonumber(ARGV[1])
 local cost = tonumber(ARGV[2])
@@ -59,4 +74,4 @@ def reserve_request(store, url, method, headers=None):
     cap = settings.binance_rest_total_budget if private else settings.binance_rest_public_budget
     cap = min(cap, settings.binance_rest_total_budget)
     if not store.eval(RESERVE, 1, 'binance:rest:weight', int(time.time()), cost, cap):
-        raise ccxt.RateLimitExceeded('Local Binance request budget exhausted; no HTTP request sent')
+        raise LocalRequestDeferred('Local Binance request budget exhausted; no HTTP request sent')

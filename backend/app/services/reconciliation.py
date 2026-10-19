@@ -15,7 +15,7 @@ class OrderReconciliationService:
         orders = (
             await db.execute(
                 select(Order)
-                .where(or_(Order.status.in_([OrderStatus.NEW.value, OrderStatus.FILLED.value, OrderStatus.PARTIAL.value]),
+                .where(or_(Order.status.in_([OrderStatus.NEW.value, OrderStatus.PARTIAL.value]),
                            Order.raw["reconciliation_required"].as_boolean().is_(True)))
                 .order_by(Order.created_at.desc())
                 .limit(200)
@@ -28,6 +28,11 @@ class OrderReconciliationService:
 
         for order in orders:
             checked += 1
+            # Terminal partials already carry their complete venue snapshot.
+            snapshot = (order.raw or {}).get("exchange_response") or {}
+            if (not (order.raw or {}).get("reconciliation_required")
+                    and str(snapshot.get("status", "")).lower() in {"closed", "filled", "canceled", "cancelled", "expired", "rejected"}):
+                continue
             if (order.raw or {}).get("reconciliation_required"):
                 try:
                     raw = (await self.exchange.fetch_order(order.exchange_order_id, order.symbol)

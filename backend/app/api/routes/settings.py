@@ -134,7 +134,7 @@ async def _settings_for(user: User, db: AsyncSession) -> UserSettings:
 async def _exchange_network_diagnostics() -> str:
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         outbound_ip = await _diagnostic_get(client, "https://api.ipify.org?format=json", json_key="ip")
-        binance_public = await _diagnostic_get(client, "https://api.binance.com/api/v3/time")
+        binance_public = "проверяется основным клиентом с общим лимитом запросов"
     return f"Outbound IP: {outbound_ip}; Binance public: {binance_public}."
 
 
