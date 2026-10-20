@@ -487,6 +487,8 @@ async def _close_position_locked(
         if position.side == "SHORT":
             remaining_profit *= -1
         position.pnl = round(existing_profit + remaining_profit, 4)
+        from app.services.profit_excursion import record_excursion
+        record_excursion(position, position.pnl)
         _log_position_event(
             db,
             "WARNING",
@@ -553,6 +555,8 @@ async def _close_position_locked(
             )
         )
     position.pnl = round(previous_realized + final_profit, 4)
+    from app.services.profit_excursion import record_excursion
+    record_excursion(position, position.pnl, at=position.closed_at, final=True)
     try:
         post_mortem = await PostMortemService(execution.exchange).analyze_loss(db, position, exit_order, "MANUAL")
         if post_mortem:

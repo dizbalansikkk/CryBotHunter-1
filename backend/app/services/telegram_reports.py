@@ -192,6 +192,7 @@ def format_partial_take_profit(
 
 
 def format_trade_closed(position: Position, *, exit_price: float, reason: str) -> str:
+    from app.services.profit_excursion import excursion_summary
     pnl = float(position.pnl or 0.0)
     result = "прибыль" if pnl > 0 else "убыток" if pnl < 0 else "без результата"
     duration = _duration(position.entered_at, position.closed_at)
@@ -230,6 +231,7 @@ def format_trade_closed(position: Position, *, exit_price: float, reason: str) -
         f"<code>{_html(position.symbol)} · {_html(_side_label(position.side))} · #{position.id}</code>\n\n"
         f"<b>ИТОГ: {pnl:+.2f} USDT · {pnl_percent:+.2f}% · {result_r:+.2f}R</b>\n"
         f"<i>{result}</i>\n\n"
+        f"{excursion_summary(context)}\n"
         "<b>Исполнение</b>\n"
         f"├ Вход: <code>{_price(position.entry_price)}</code>\n"
         f"├ Выход: <code>{_price(exit_price)}</code>\n"

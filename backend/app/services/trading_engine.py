@@ -31,6 +31,7 @@ from app.services.paper_signals import paper_exploration_signal, paper_explorati
 from app.services.pretrade_quality import PreTradeQualityGate
 from app.services.post_mortem import PostMortemService
 from app.services.portfolio_accounting import PortfolioAccountingService
+from app.services.profit_excursion import record_excursion
 from app.services.risk_manager import DrawdownAssessment, RiskManager, RiskSettings
 from app.services.rl_gate import RlDecisionGate
 from app.services.strategy import StrategyCore
@@ -688,6 +689,7 @@ class TradingEngine:
             position.highest_price = max(position.highest_price or position.entry_price, price)
             position.lowest_price = min(position.lowest_price or position.entry_price, price)
             position.pnl = await self._position_total_pnl(db, position, price)
+            record_excursion(position, position.pnl)
             await self._capture_position_microstructure(position)
 
         drawdown = await self._enforce_drawdown_limit(db, balance, force_snapshot=True)
@@ -1304,6 +1306,7 @@ class TradingEngine:
         db.add(position)
         await db.flush()
         db.add(Trade(position_id=position.id, symbol=coin.symbol, side=side, entry_price=entry_price, exit_price=None, profit=-entry_order.fee))
+        record_excursion(position, -entry_order.fee, from_entry=True)
         protected = await self._replace_protective_stop(
             db,
             position,
@@ -2073,6 +2076,7 @@ class TradingEngine:
             )
         )
         position.pnl = await self._position_total_pnl(db, position, mark_price)
+        record_excursion(position, position.pnl)
         return closed_volume, round(partial_profit, 4)
 
     async def _close_position(
@@ -2182,6 +2186,7 @@ class TradingEngine:
                 )
             )
         position.pnl = self._total_closed_profit(previous_realized, final_trade_profit)
+        record_excursion(position, position.pnl, at=position.closed_at, final=True)
         if reason in {"STOP_LOSS", "BREAKEVEN_STOP", "EMERGENCY_DRAWDOWN"}:
             self._record_stop_slippage_observation(
                 db,
@@ -2270,6 +2275,7 @@ class TradingEngine:
             entry_fee=entry_execution.get("fee") if isinstance(entry_execution, dict) else None,
             exit_fee=exit_order.fee,
             exit_slippage=exit_order.slippage,
+            profit_excursion=(position.entry_context or {}).get("profit_excursion"),
             **self._fill_audit(exit_order, "FINAL"),
         )
         self._log_trading_event(

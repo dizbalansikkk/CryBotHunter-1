@@ -25,7 +25,7 @@ def test_gap_through_stop_is_not_filled_at_unavailable_stop_price():
 
 def test_trail_uses_completed_bar_extreme_and_does_not_change_fixed_branch():
     bars = [[0, 100, 103, 99, 102.5], [300000, 102.5, 103, 101, 102]]
-    fixed = replay(bars)
+    fixed = replay(bars, end_time_ms=600000)
     trail = replay(bars, trailing_percent=.8)
     assert fixed["status"] == "OPEN_AT_HORIZON"
     assert trail["reason"] == "TRAILING_STOP"

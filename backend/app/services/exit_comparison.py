@@ -43,5 +43,10 @@ def replay_exit(*, bars, entry_time_ms, end_time_ms, entry, volume, side,
         net = direction * (fill - entry) * volume - entry_fee - fill * volume * exit_fee_rate
         return {"status": "CLOSED", "reason": reason, "net_pnl": net,
                 "exit_bar_ms": timestamp, "fill": fill, "ambiguous_bars": ambiguous}
+    if selected[-1][0] + interval_ms != end_time_ms // interval_ms * interval_ms:
+        return {"status": "INCOMPLETE_HORIZON"}
+    hypothetical_fill = selected[-1][4] * (1 - direction * slippage_bps / 10_000)
     return {"status": "OPEN_AT_HORIZON", "last_price": selected[-1][4],
+            "liquidation_value_estimate": direction * (hypothetical_fill - entry) * volume
+                - entry_fee - hypothetical_fill * volume * exit_fee_rate,
             "mark_pnl_before_exit_costs": direction * (selected[-1][4] - entry) * volume - entry_fee}

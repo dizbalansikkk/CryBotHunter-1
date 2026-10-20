@@ -89,6 +89,10 @@ class TradeAuditExportService:
                     "stop": position.stop,
                     "take": position.take,
                     "pnl": position.pnl,
+                    **{key: (context.get("profit_excursion") or {}).get(key, "") for key in (
+                        "max_profit_usdt", "max_loss_usdt", "giveback_usdt", "final_pnl_usdt",
+                        "max_profit_r", "max_loss_r", "giveback_r", "final_pnl_r",
+                        "risk_basis_usdt", "coverage", "first_observed_at", "samples")},
                     "exit_reason": position.exit_reason or "",
                     "signal": context.get("signal", ""),
                     "signal_score": context.get("signal_score", ""),
