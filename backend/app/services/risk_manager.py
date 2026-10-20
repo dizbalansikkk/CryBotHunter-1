@@ -128,18 +128,22 @@ class RiskManager:
         max_position_percent: float = 100.0,
         min_notional: float = 0.0,
         max_risk_percent: float | None = None,
+        cost_per_unit: float = 0.0,
     ) -> float:
         values = (balance, risk_percent, entry_price, stop_price, max_position_percent)
         if not all(self._is_positive_finite(value) for value in values):
+            return 0.0
+        if not math.isfinite(cost_per_unit) or cost_per_unit < 0:
             return 0.0
         loss_budget = float(balance) * float(risk_percent) / 100
         price_risk = abs(float(entry_price) - float(stop_price))
         if price_risk <= 0:
             return 0.0
+        price_risk += cost_per_unit
         risk_sized_volume = loss_budget / price_risk
         position_cap = float(balance) * min(float(max_position_percent), 100.0) / 100
         cap_sized_volume = position_cap / float(entry_price)
-        volume = round(min(risk_sized_volume, cap_sized_volume), 8)
+        volume = math.floor(min(risk_sized_volume, cap_sized_volume) * 1e8) / 1e8
         if not math.isfinite(min_notional) or min_notional < 0:
             return 0.0
         if min_notional > 0:

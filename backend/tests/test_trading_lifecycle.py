@@ -239,7 +239,8 @@ def test_exposure_gate_rejects_overloaded_portfolio():
 
 def test_daily_risk_gate_reserves_open_stop_distance_before_new_entry():
     engine = TradingEngine()
-    engine.settings = SimpleNamespace(daily_risk_reserve_enabled=True, paper_trading=True, paper_slippage_bps=2, min_entry_notional_usdt=5)
+    engine.settings = SimpleNamespace(daily_risk_reserve_enabled=True, paper_trading=True, paper_slippage_bps=2, min_entry_notional_usdt=5,
+                                     paper_fee_rate=.0004, execution_market_impact_bps=2)
     settings = risk_settings()
     settings.daily_risk_percent = 1
 
@@ -252,7 +253,7 @@ def test_daily_risk_gate_reserves_open_stop_distance_before_new_entry():
         reserved_open_stop_risk=3,
     )
 
-    assert candidate_risk == 7.5
+    assert candidate_risk == pytest.approx(7.7955)
     assert accepted is False
     assert "daily risk reserve" in reason
 
@@ -268,7 +269,7 @@ def test_stop_risk_only_reserves_remaining_distance_to_stop():
         take=110,
     )
 
-    assert TradingEngine()._position_stop_risk(position) == 4
+    assert TradingEngine()._position_stop_risk(position) == pytest.approx(4.12)
 
 
 def test_ticker_price_fallback_uses_conservative_side_of_spread():

@@ -865,7 +865,8 @@ class TradingEngine:
             stop, take, _ = self._exit_plan(coin.price, coin.atr, "LONG" if signal == "BUY" else "SHORT", settings)
             volume = self.risk.calculate_position_size(balance, settings.risk_percent, coin.price, stop,
                 max_position_percent=settings.max_position_size_percent,
-                min_notional=self._minimum_entry_notional(), max_risk_percent=settings.max_risk_percent_per_trade)
+                min_notional=self._minimum_entry_notional(), max_risk_percent=settings.max_risk_percent_per_trade,
+                cost_per_unit=self._entry_cost_per_unit(coin, stop))
             leverage = min(self.settings.futures_leverage, self.settings.futures_max_leverage) if self.exchange.is_derivatives_market() else 1
             notional = volume * coin.price
             from app.services.trade_costs import estimate_costs
@@ -875,12 +876,21 @@ class TradingEngine:
                 funding_rate=coin.funding_rate if self.exchange.is_derivatives_market() else 0.0)
             return {"available": volume > 0, "cost_scenario": costs, "notional": round(notional, 6), "volume": volume,
                 "estimated_margin": round(notional / max(leverage, 1), 6), "leverage": leverage,
-                "stop_risk": round(abs(coin.price - stop) * volume, 6), "stop": stop, "take": take,
+                "stop_risk": round((abs(coin.price - stop) + self._entry_cost_per_unit(coin, stop)) * volume, 6), "stop": stop, "take": take,
                 "estimated_entry_fee": round(notional * self.settings.paper_fee_rate, 6) if self.settings.paper_trading else None,
                 "minimum": self.settings.min_entry_notional_usdt,
                 "note": "Расчёт до исполнения; не подтверждение допуска или заявки"}
         except (ValueError, TypeError, ArithmeticError):
             return {"available": False, "note": "Некорректные данные для расчёта"}
+
+    def _entry_cost_per_unit(self, coin, stop) -> float:
+        from app.services.trade_costs import estimate_costs
+        costs = estimate_costs(price=coin.price, stop=stop, take=coin.price, volume=1.0,
+            fee_rate=self.settings.paper_fee_rate, spread_bps=float(coin.spread_bps or 0),
+            slippage_bps=max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps))
+        if not costs["available"]:
+            return float("nan")
+        return max(costs["loss_at_stop_with_costs"] - abs(coin.price - stop), 0.0)
 
     def _minimum_entry_notional(self) -> float:
         # Cover adverse SELL slippage as well as eight-decimal size rounding.
@@ -1129,6 +1139,7 @@ class TradingEngine:
             max_position_percent=settings.max_position_size_percent,
             min_notional=self._minimum_entry_notional(),
             max_risk_percent=settings.max_risk_percent_per_trade,
+            cost_per_unit=self._entry_cost_per_unit(coin, stop),
         )
         if volume <= 0:
             return None
@@ -1229,7 +1240,20 @@ class TradingEngine:
                 }
             )
         notional = entry_price * volume
-        planned_risk = initial_risk * volume
+        price_risk = initial_risk * volume
+        # Entry price already includes actual entry slippage; do not count it twice.
+        exit_fee_rate = max(self.settings.paper_fee_rate,
+                            float(entry_order.fee or 0) / max(entry_price * volume, 1e-12))
+        exit_buffer = stop * volume * (
+            max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps)
+            + max(float(coin.spread_bps or 0), 0) / 2) / 10_000
+        planned_risk = price_risk + float(entry_order.fee or 0) + stop * volume * exit_fee_rate + exit_buffer
+        entry_context["risk_costs"] = {
+            "version": 1, "price_risk": price_risk, "entry_fee": float(entry_order.fee or 0),
+            "estimated_exit_fee": stop * volume * exit_fee_rate,
+            "estimated_exit_friction": exit_buffer, "funding_included": False,
+            "estimate_only": True,
+        }
         planned_reward = abs(take - entry_price) * volume
         entry_context.update(
             {
@@ -1439,8 +1463,9 @@ class TradingEngine:
             max_position_percent=settings.max_position_size_percent,
             min_notional=self._minimum_entry_notional(),
             max_risk_percent=settings.max_risk_percent_per_trade,
+            cost_per_unit=self._entry_cost_per_unit(coin, stop),
         )
-        candidate_stop_risk = round(abs(coin.price - stop) * volume, 4)
+        candidate_stop_risk = round((abs(coin.price - stop) + self._entry_cost_per_unit(coin, stop)) * volume, 4)
         if candidate_stop_risk <= 0:
             return False, "entry size unavailable: minimum notional cannot fit risk/position limits or sizing inputs are invalid", 0.0
         if not getattr(self.settings, "daily_risk_reserve_enabled", True):
@@ -1475,6 +1500,7 @@ class TradingEngine:
             max_position_percent=settings.max_position_size_percent,
             min_notional=self._minimum_entry_notional(),
             max_risk_percent=settings.max_risk_percent_per_trade,
+            cost_per_unit=self._entry_cost_per_unit(coin, stop),
         )
         candidate_notional = self.risk.position_notional(coin.price, volume)
         venue_limit = (
@@ -3116,4 +3142,8 @@ class TradingEngine:
         if price <= 0 or stop <= 0 or volume <= 0:
             return 0.0
         distance_to_stop = price - stop if position.side == "LONG" else stop - price
-        return round(max(distance_to_stop, 0.0) * volume, 4)
+        fee_rate = max(float(self.settings.paper_fee_rate), 0.0)
+        slippage_bps = max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps, 0)
+        # Entry fee is already included in current equity; reserve only exit costs.
+        exit_cost = stop * volume * (fee_rate + slippage_bps / 10_000)
+        return round(max(distance_to_stop, 0.0) * volume + exit_cost, 4)

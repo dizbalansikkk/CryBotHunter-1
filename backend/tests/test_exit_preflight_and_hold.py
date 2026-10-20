@@ -46,7 +46,7 @@ async def test_preflight_runs_before_entry_and_never_increases_size():
     engine.execution.execute_market = execute
     settings = Row(risk_percent=1, max_position_size_percent=10,
                    max_risk_percent_per_trade=1, partial_close_percent=25)
-    await engine._open_position(Row(), Row(symbol="ETH/USDT", price=100, atr=2),
+    await engine._open_position(Row(), Row(symbol="ETH/USDT", price=100, atr=2, spread_bps=0),
         "BUY", [], 100, settings)
     assert calls == ["assess", "entry"]
 
