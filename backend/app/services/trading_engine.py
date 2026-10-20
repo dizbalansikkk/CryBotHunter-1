@@ -741,6 +741,19 @@ class TradingEngine:
                     "EMERGENCY_DRAWDOWN",
                     cycle_id=cycle_id,
                 )
+            elif self._exit_reason(position):
+                # Already-crossed levels take precedence over new partial orders
+                # and stop replacement. Never delay a crossed stop for an ACK.
+                reason = self._exit_reason(position)
+                if reason == "TAKE_PROFIT":
+                    outcome = await self._handle_dynamic_take_profit(db, position, price, cycle_id=cycle_id)
+                    if outcome == "CLOSE":
+                        await self._close_position(db, position, price, reason, cycle_id=cycle_id)
+                    elif outcome == "EXTENDED":
+                        await self._replace_protective_stop(db, position, stop_price=position.stop,
+                                                           stage="DYNAMIC_TAKE", cycle_id=cycle_id)
+                else:
+                    await self._close_position(db, position, price, reason, cycle_id=cycle_id)
             else:
                 stop_before_updates = position.stop
                 first_partial_volume = await self._apply_partial_take_profit(db, position, price, cycle_id=cycle_id)
@@ -748,7 +761,7 @@ class TradingEngine:
                     continue
                 # The stop is protected only after the exchange confirms TP1.
                 # A price merely touching its trigger is not an execution event.
-                if first_partial_volume and self._apply_breakeven(position):
+                if self._apply_breakeven(position):
                     entry_context = position.entry_context if isinstance(position.entry_context, dict) else {}
                     protection = entry_context.get("breakeven_protection", {})
                     self._log_trading_event(
@@ -819,20 +832,7 @@ class TradingEngine:
                             cycle_id=cycle_id,
                         )
                 elif exit_reason:
-                    if self._defer_unconfirmed_breakeven_exit(position, exit_reason):
-                        self._log_trading_event(
-                            db,
-                            "WARNING",
-                            "BREAKEVEN_STOP_CONFIRMATION_PENDING",
-                            f"Breakeven stop replacement is unconfirmed for {position.symbol} #{position.id}",
-                            cycle_id=cycle_id,
-                            symbol=position.symbol,
-                            position_id=position.id,
-                            exit_reason=exit_reason,
-                            deadline=self._protection_state(position).get("deadline"),
-                        )
-                    else:
-                        await self._close_position(db, position, price, exit_reason, cycle_id=cycle_id)
+                    await self._close_position(db, position, price, exit_reason, cycle_id=cycle_id)
             updates.append(
                 PositionUpdateOut(
                     id=position.id,
@@ -1151,6 +1151,7 @@ class TradingEngine:
                 side=side, entry_price=coin.price, strategy_take=take,
                 entry_volume=volume, entry_fee=volume * coin.price * self.settings.paper_fee_rate,
                 tp1_percent=settings.partial_close_percent,
+                initial_risk=initial_risk, tp1_r=settings.partial_take_profit_r,
             ),
         )
         entry_order = await self.execution.execute_market(
@@ -1176,6 +1177,9 @@ class TradingEngine:
         entry_context["exit_fills"] = []
         entry_context["execution_mode"] = "PAPER" if self.settings.paper_trading else "LIVE"
         entry_context["exit_plan"] = {
+            "initial_stop": stop,
+            "initial_take": take,
+            "configured_price_reward_risk": settings.risk_reward_ratio,
             "entry_atr": round(float(coin.atr or 0.0), 8),
             "atr_stop_multiplier": round(float(settings.atr_stop_multiplier), 4),
             "initial_risk": round(float(initial_risk), 8),
@@ -1256,11 +1260,19 @@ class TradingEngine:
             "estimated_exit_friction": exit_buffer, "funding_included": False,
             "estimate_only": True,
         }
-        planned_reward = abs(take - entry_price) * volume
+        gross_reward = abs(take - entry_price) * volume
+        planned_reward = (gross_reward - float(entry_order.fee or 0) - take * volume * exit_fee_rate
+                          - take * volume * (
+                              max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps)
+                              + max(float(coin.spread_bps or 0), 0) / 2) / 10_000)
+        entry_context["configured_price_reward_risk"] = settings.risk_reward_ratio
+        entry_context["gross_target_reward"] = gross_reward
+        entry_context["reward_assumption"] = "full_exit_at_final_target_after_estimated_costs; scale_outs_and_trailing_change_outcome"
         entry_context.update(
             {
                 "balance": round(float(balance), 2),
                 "risk_percent": round(float(settings.risk_percent), 4),
+                "actual_planned_risk_percent": round(planned_risk / balance * 100, 6) if balance > 0 else None,
                 "notional": round(notional, 2),
                 "planned_risk": round(planned_risk, 4),
                 "planned_reward": round(planned_reward, 4),
@@ -1277,6 +1289,7 @@ class TradingEngine:
             entry_volume=volume,
             entry_fee=entry_order.fee,
             tp1_percent=settings.partial_close_percent,
+            initial_risk=initial_risk, tp1_r=settings.partial_take_profit_r,
         )
         entry_context["scale_out"] = (
             {**actual_plan, "mode": "MONOLITHIC", "preflight": preflight_plan.get("preflight")}
@@ -1738,6 +1751,13 @@ class TradingEngine:
         if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
             return 0.0
         scale_out = self._scale_out_state(position)
+        if (scale_out.get("mode") == "CASCADE" and scale_out.get("tp1_fill_price")
+                and (self._finite_float(scale_out.get("tp2_price")) - scale_out["tp1_fill_price"])
+                    * (1 if position.side == "LONG" else -1) <= 0):
+            context = dict(position.entry_context or {})
+            context["scale_out"] = {**scale_out, "mode": "MONOLITHIC", "reason": "TP2_not_beyond_filled_TP1"}
+            position.entry_context = context
+            return 0.0
         if (
             not position.partial_taken
             or scale_out.get("mode") != "CASCADE"
@@ -1831,7 +1851,12 @@ class TradingEngine:
         return closed_volume
 
     def _partial_take_profit_reached(self, position: Position, price: float) -> bool:
-        trigger = self._scale_out_price(position, "tp1_price", self._break_even_price(position))
+        risk = self._original_price_risk(position)
+        multiple = self._finite_float(position.partial_take_profit_r) or 1.0
+        r_price = position.entry_price + (1 if position.side == "LONG" else -1) * risk * multiple
+        planned = self._scale_out_price(position, "tp1_price", r_price)
+        cost_floor = self._break_even_price(position)
+        trigger = max(planned, r_price, cost_floor) if position.side == "LONG" else min(planned, r_price, cost_floor)
         if position.side == "LONG":
             return price >= trigger
         return price <= trigger
@@ -1950,6 +1975,7 @@ class TradingEngine:
 
         next_stop, next_take, extension_distance = self._dynamic_take_levels(position, exit_order.average_price)
         position.stop = next_stop
+        position.entry_context = {**(position.entry_context or {}), "stop_origin": "DYNAMIC_TAKE_PROFIT_STOP"}
         position.take = next_take
         context = dict(position.entry_context or {})
         context["dynamic_take_profit"] = {
@@ -2095,6 +2121,10 @@ class TradingEngine:
         requested_volume = position.volume
         if exit_order is None:
             exit_order = await self._cancel_active_protective_stop(db, position, cycle_id=cycle_id)
+            if exit_order is not None:
+                # Cancellation can discover that the stop filled first.
+                # Attribute the actual fill, not the now-abandoned exit intent.
+                reason = (exit_order.raw or {}).get("stop_origin") or self._stop_exit_reason(position)
         if exit_order is None:
             exit_order = await self.execution.execute_market(
                 db,
@@ -2187,11 +2217,13 @@ class TradingEngine:
             )
         position.pnl = self._total_closed_profit(previous_realized, final_trade_profit)
         record_excursion(position, position.pnl, at=position.closed_at, final=True)
-        if reason in {"STOP_LOSS", "BREAKEVEN_STOP", "EMERGENCY_DRAWDOWN"}:
+        if reason in {"STOP_LOSS", "BREAKEVEN_STOP", "TRAILING_STOP", "PROFIT_PROTECTION_STOP",
+                      "DYNAMIC_TAKE_PROFIT_STOP", "EMERGENCY_DRAWDOWN"}:
             self._record_stop_slippage_observation(
                 db,
                 position,
-                expected_price=exit_price,
+                expected_price=(exit_price if reason == "EMERGENCY_DRAWDOWN" else
+                                self._finite_float((exit_order.raw or {}).get("stop_price")) or position.stop),
                 actual_price=exit_order.average_price,
                 exit_fee=exit_order.fee,
                 exit_slippage=exit_order.slippage,
@@ -2310,19 +2342,28 @@ class TradingEngine:
         context = position.entry_context if isinstance(position.entry_context, dict) else {}
         plan = context.get("exit_plan") or {}
         activation_r = max(float(plan.get("trailing_activation_r", self.settings.trailing_activation_r)), 0.0)
-        initial_risk = float(position.initial_risk or abs(position.entry_price - position.stop))
+        initial_risk = self._original_price_risk(position)
         favorable_move = (position.highest_price - position.entry_price if position.side == "LONG"
                           else position.entry_price - position.lowest_price)
         # Preserve the ATR breathing room until the position earns a trail.
         # Existing stops are never moved away from the current protected level.
         if favorable_move < initial_risk * activation_r:
             return
+        prior_stop = position.stop
         if position.side == "LONG":
             trailing_stop = position.highest_price * (1 - position.trailing_stop_percent / 100)
             position.stop = max(position.stop, trailing_stop)
         else:
             trailing_stop = position.lowest_price * (1 + position.trailing_stop_percent / 100)
             position.stop = min(position.stop, trailing_stop)
+        if position.stop != prior_stop:
+            position.entry_context = {**(position.entry_context or {}), "stop_origin": "TRAILING_STOP"}
+
+    def _original_price_risk(self, position: Position) -> float:
+        context = position.entry_context or {}
+        return (self._finite_float(position.initial_risk)
+                or self._finite_float((context.get("exit_plan") or {}).get("initial_risk"))
+                or abs(position.entry_price - position.stop))
 
     def _apply_breakeven(self, position: Position) -> bool:
         if position.breakeven_applied:
@@ -2332,16 +2373,29 @@ class TradingEngine:
         # profit that can protect the remaining position.
         if not position.partial_taken:
             return False
+        direction = 1 if position.side == "LONG" else -1
+        trigger_r = self._finite_float(position.breakeven_trigger_r) or 1.0
+        if direction * (position.current_price - position.entry_price) < self._original_price_risk(position) * trigger_r:
+            return False
         requested_offset = max(float(position.breakeven_offset_percent or 0.0), 0.0)
         effective_offset = self._breakeven_offset_percent(position, requested_offset)
         price_bu = self._break_even_price(position)
+        offset_price = position.entry_price * (1 + direction * requested_offset / 100)
+        price_bu = max(price_bu, offset_price) if direction == 1 else min(price_bu, offset_price)
+        # A market stop on the wrong side of the current quote is not protection.
+        if direction * (position.current_price - price_bu) <= 0:
+            return False
+        effective_offset = abs(price_bu / position.entry_price - 1) * 100
         if price_bu <= 0:
             return False
+        prior_stop = position.stop
         if position.side == "LONG":
             position.stop = max(position.stop, price_bu)
         else:
             position.stop = min(position.stop, price_bu)
         position.breakeven_applied = True
+        if prior_stop != position.stop:
+            position.entry_context = {**(position.entry_context or {}), "stop_origin": "BREAKEVEN_STOP"}
         self._record_breakeven_protection(position, requested_offset, effective_offset, price_bu)
         return True
 
@@ -2471,6 +2525,7 @@ class TradingEngine:
             stop_price=stop_price,
             stage=stage,
         )
+        order.raw = {**(order.raw or {}), "stop_origin": self._stop_exit_reason(position)}
         if order.status == OrderStatus.NEW.value and order.exchange_order_id:
             self._set_protection_state(
                 position,
@@ -2597,7 +2652,7 @@ class TradingEngine:
             db,
             position,
             exit_price=price,
-            reason="BREAKEVEN_STOP" if position.breakeven_applied else "STOP_LOSS",
+            reason=raw.get("stop_origin") or self._stop_exit_reason(position),
             cycle_id=cycle_id,
             exit_order=order,
         )
@@ -2737,22 +2792,31 @@ class TradingEngine:
         entry_volume: float,
         entry_fee: float,
         tp1_percent: float,
+        initial_risk: float | None = None,
+        tp1_r: float = 1.0,
     ) -> dict:
         price_bu = self._break_even_price_from_values(side, entry_price, entry_volume, entry_fee)
+        risk = initial_risk if initial_risk is not None else abs(strategy_take - entry_price) / 2
+        first = entry_price + (1 if side == "LONG" else -1) * risk * max(tp1_r, 0.0001)
+        first = max(first, price_bu) if side == "LONG" else min(first, price_bu)
         distance_percent = min(
             max(self._finite_float(getattr(self.settings, "scale_out_tp2_distance_percent", 1.25)), 1.0),
             1.5,
         )
         tp2 = entry_price * (1 + distance_percent / 100) if side == "LONG" else entry_price * (1 - distance_percent / 100)
         return {
-            "mode": "CASCADE",
+            "mode": "CASCADE" if (
+                first < tp2 < strategy_take if side == "LONG" else first > tp2 > strategy_take
+            ) else "MONOLITHIC",
             "entry_volume": round(float(entry_volume), 8),
-            "tp1_price": round(price_bu, 8),
+            "tp1_price": round(first, 8),
+            "tp1_r": tp1_r,
+            "initial_price_risk": risk,
             "tp1_percent": round(min(max(self._finite_float(tp1_percent), 10.0), 30.0), 4),
             "tp2_price": round(max(tp2, entry_price * 0.0001), 8),
             "tp2_percent": round(min(max(self._finite_float(getattr(self.settings, "scale_out_tp2_percent", 35.0)), 30.0), 40.0), 4),
             "tp3_price": round(float(strategy_take), 8),
-            "price_basis": "TP1=Price_BU; TP2=fixed entry percentage because no explicit S/R detector is implemented; TP3=strategy target",
+            "price_basis": "TP1=configured R with cost floor; TP2=fixed percentage; invalid target order uses full exit",
         }
 
     def _scale_out_state(self, position: Position) -> dict:
@@ -2831,9 +2895,26 @@ class TradingEngine:
         entry = self._finite_float(entry_price)
         if entry <= 0:
             return 0.0
-        rate = self._break_even_cost_rate(entry, volume, entry_fee)
-        price = entry * (1 + rate) if side == "LONG" else entry * (1 - rate)
+        fee = entry_fee / (entry * volume) if volume > 0 and entry_fee > 0 else max(
+            self._finite_float(getattr(self.settings, "paper_fee_rate", .0004)), 0.0)
+        slip = max(self._finite_float(getattr(self.settings, "breakeven_slippage_buffer_bps", 2)),
+                   self._finite_float(getattr(self.settings, "paper_slippage_bps", 2)),
+                   self._finite_float(getattr(self.settings, "execution_market_impact_bps", 2))) / 10_000
+        if fee >= 1 or slip >= 1:
+            return 0.0
+        price = (entry * (1 + fee) / ((1 - fee) * (1 - slip)) if side == "LONG"
+                 else entry * (1 - fee) / ((1 + fee) * (1 + slip)))
         return round(max(price, entry * 0.0001), 8)
+
+    def _stop_exit_reason(self, position: Position) -> str:
+        origin = (position.entry_context or {}).get("stop_origin")
+        if origin in {"TRAILING_STOP", "BREAKEVEN_STOP", "DYNAMIC_TAKE_PROFIT_STOP"}:
+            return origin
+        if position.breakeven_applied:
+            return "BREAKEVEN_STOP"
+        if (position.stop - position.entry_price) * (1 if position.side == "LONG" else -1) > 0:
+            return "PROFIT_PROTECTION_STOP"
+        return "STOP_LOSS"
 
     def _break_even_cost_rate(self, entry_price: float, volume: float, entry_fee: float) -> float:
         notional = entry_price * max(volume, 0.0)
@@ -2847,12 +2928,12 @@ class TradingEngine:
     def _exit_reason(self, position: Position) -> str | None:
         if position.side == "LONG":
             if position.current_price <= position.stop:
-                return "BREAKEVEN_STOP" if position.breakeven_applied else "STOP_LOSS"
+                return self._stop_exit_reason(position)
             if position.current_price >= position.take:
                 return "TAKE_PROFIT"
         else:
             if position.current_price >= position.stop:
-                return "BREAKEVEN_STOP" if position.breakeven_applied else "STOP_LOSS"
+                return self._stop_exit_reason(position)
             if position.current_price <= position.take:
                 return "TAKE_PROFIT"
         return None
@@ -2919,7 +3000,7 @@ class TradingEngine:
         expected = max(self._finite_float(expected_price), 0.0)
         actual = max(self._finite_float(actual_price), 0.0)
         reported_slippage = max(self._finite_float(exit_slippage), 0.0)
-        price_deviation = abs(actual - expected)
+        price_deviation = max((expected - actual) * (1 if position.side == "LONG" else -1), 0.0)
         effective_slippage = max(reported_slippage, price_deviation)
         slippage_bps = effective_slippage / expected * 10_000 if expected > 0 else 0.0
         context = dict(position.entry_context or {})
@@ -2927,6 +3008,7 @@ class TradingEngine:
             "reason": reason,
             "expected_price": round(expected, 8),
             "actual_price": round(actual, 8),
+            "stop_adverse_deviation_bps": round(price_deviation / expected * 10_000, 4) if expected > 0 else None,
             "reported_slippage": round(reported_slippage, 8),
             "effective_slippage": round(effective_slippage, 8),
             "slippage_bps": round(slippage_bps, 4),

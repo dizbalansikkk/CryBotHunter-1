@@ -15,7 +15,7 @@ def assessment(amount, allowed=True):
 async def test_preflight_checks_both_takes_and_normalized_remainder(failed_stage):
     engine = TradingEngine()
     plan = engine._initial_scale_out_plan(side="LONG", entry_price=100, strategy_take=110,
-        entry_volume=1, entry_fee=.1, tp1_percent=25)
+        entry_volume=1, entry_fee=.1, tp1_percent=25, initial_risk=.5)
     results = [assessment(.25), assessment(.35), assessment(.40)]
     if failed_stage is not None:
         results[failed_stage].allowed = False
@@ -45,7 +45,7 @@ async def test_preflight_runs_before_entry_and_never_increases_size():
     engine.execution.assess_exit_size = assess
     engine.execution.execute_market = execute
     settings = Row(risk_percent=1, max_position_size_percent=10,
-                   max_risk_percent_per_trade=1, partial_close_percent=25)
+                   max_risk_percent_per_trade=1, partial_close_percent=25, partial_take_profit_r=1)
     await engine._open_position(Row(), Row(symbol="ETH/USDT", price=100, atr=2, spread_bps=0),
         "BUY", [], 100, settings)
     assert calls == ["assess", "entry"]

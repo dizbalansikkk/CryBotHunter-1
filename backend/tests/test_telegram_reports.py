@@ -74,7 +74,7 @@ def test_open_report_explains_test_entry_and_risk_plan():
     assert "риск ≈ 4.00 USDT" in report
     assert "строгий сигнал был WAIT" in report
     assert "Дальше бот отслеживает" in report
-    assert "Risk/Reward: <code>1:3.00</code>" in report
+    assert "Полный тейк, чистый R/R (оценка): <code>1:3.00</code>" in report
     assert "RSI 58.4" in report
     assert "частичная фиксация 50%" in report
     assert report.count("<b>") == report.count("</b>")

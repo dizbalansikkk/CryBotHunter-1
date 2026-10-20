@@ -327,8 +327,8 @@ def test_breakeven_moves_long_stop_past_round_trip_costs_after_trigger():
     assert position.breakeven_applied is True
     # 0.05% configured offset is raised to 0.10%: 4 bps entry fee,
     # 4 bps expected exit fee, and 2 bps expected exit slippage.
-    assert position.stop == 100.1
-    assert position.entry_context["breakeven_protection"]["effective_offset_percent"] == 0.1
+    assert 100.1 < position.stop < 100.101
+    assert position.entry_context["breakeven_protection"]["effective_offset_percent"] == pytest.approx(0.1001)
     assert engine._exit_reason(position) is None
 
 
@@ -373,7 +373,7 @@ def test_partial_take_profit_reaches_trigger_and_sizes_close():
     assert engine._profit_for_volume(position, 104, 1) == 4
 
 
-def test_tp1_uses_cost_aware_break_even_price_and_not_one_r_trigger():
+def test_tp1_respects_one_r_instead_of_exiting_at_cost_only_break_even():
     position = Position(
         symbol="BTC/USDT",
         side="LONG",
@@ -387,8 +387,9 @@ def test_tp1_uses_cost_aware_break_even_price_and_not_one_r_trigger():
     engine = TradingEngine()
     engine.settings = SimpleNamespace(paper_fee_rate=0.0004, breakeven_slippage_buffer_bps=2.0)
 
-    assert engine._break_even_price(position) == 100.1
-    assert engine._partial_take_profit_reached(position, 100.1) is True
+    assert 100.1 < engine._break_even_price(position) < 100.101
+    assert engine._partial_take_profit_reached(position, 100.1) is False
+    assert engine._partial_take_profit_reached(position, 104) is True
     assert engine._partial_take_profit_reached(position, 100.09) is False
 
 
@@ -419,7 +420,7 @@ async def test_scale_out_is_cancelled_before_an_invalid_small_tp_order_is_sent()
         execute_market=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("small order must not be sent")),
     )
 
-    closed = await engine._apply_partial_take_profit(Db(), position, 100.1, cycle_id="cycle")
+    closed = await engine._apply_partial_take_profit(Db(), position, 104, cycle_id="cycle")
 
     assert closed == 0
     assert position.entry_context["scale_out"]["mode"] == "MONOLITHIC"

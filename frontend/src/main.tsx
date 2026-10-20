@@ -2384,6 +2384,10 @@ function translateStatus(value: string) {
     OPEN: "Открыта",
     CLOSED: "Закрыта",
     STOP_LOSS: "Стоп-лосс",
+    TRAILING_STOP: "Трейлинг-стоп",
+    BREAKEVEN_STOP: "Стоп безубытка",
+    PROFIT_PROTECTION_STOP: "Стоп защиты прибыли",
+    DYNAMIC_TAKE_PROFIT_STOP: "Стоп после продления тейка",
     TAKE_PROFIT: "Тейк-профит"
   };
   return labels[value] ?? value;

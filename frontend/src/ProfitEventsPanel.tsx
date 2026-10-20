@@ -17,7 +17,7 @@ const labels: Record<string, string> = {
   POSITION_CLOSE_FAILED: "Закрытие не подтверждено",
   SCALE_OUT_CANCELLED_MIN_NOTIONAL: "Частичная фиксация отменена: малый объём",
 };
-const reason: Record<string, string> = { TAKE_PROFIT: "тейк-профит", STOP_LOSS: "стоп-лосс", BREAKEVEN_STOP: "безубыточный стоп", EMERGENCY_DRAWDOWN: "защита от просадки" };
+const reason: Record<string, string> = { TAKE_PROFIT: "тейк-профит", STOP_LOSS: "стоп-лосс", BREAKEVEN_STOP: "безубыточный стоп", TRAILING_STOP: "трейлинг-стоп", PROFIT_PROTECTION_STOP: "стоп защиты прибыли", DYNAMIC_TAKE_PROFIT_STOP: "стоп после продления тейка", EMERGENCY_DRAWDOWN: "защита от просадки" };
 const number = (v: unknown) => typeof v === "number" ? v.toLocaleString("ru-RU", {maximumFractionDigits: 8}) : "—";
 const time = (v: unknown) => typeof v === "string" ? new Date(v).toLocaleString("ru-RU", {timeZone: "Europe/Simferopol"}) : "—";
 

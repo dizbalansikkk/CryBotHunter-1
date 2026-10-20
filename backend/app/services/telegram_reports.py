@@ -11,6 +11,10 @@ from app.services.telegram_daily import DailyReportSnapshot
 
 
 EXIT_REASON_LABELS = {
+    "TRAILING_STOP": "сработал трейлинг-стоп",
+    "BREAKEVEN_STOP": "сработал стоп безубытка",
+    "PROFIT_PROTECTION_STOP": "сработал стоп защиты прибыли",
+    "DYNAMIC_TAKE_PROFIT_STOP": "сработал стоп после продления тейка",
     "STOP_LOSS": "сработал стоп-лосс",
     "TAKE_PROFIT": "достигнут тейк-профит",
     "EMERGENCY_DRAWDOWN": "аварийное закрытие из-за лимита просадки",
@@ -102,7 +106,8 @@ def format_trade_opened(
         "<b>Риск-план</b>\n"
         f"├ SL: <code>{_price(position.stop)}</code> · {stop_distance:.2f}% · риск ≈ {risk_amount:.2f} USDT\n"
         f"├ TP: <code>{_price(position.take)}</code> · {take_distance:.2f}% · цель ≈ {reward_amount:.2f} USDT\n"
-        f"├ Risk/Reward: <code>1:{risk_reward:.2f}</code> · риск баланса {float(context.get('risk_percent') or 0):.3f}%\n"
+        f"├ Полный тейк, чистый R/R (оценка): <code>1:{risk_reward:.2f}</code>\n"
+        f"├ Риск баланса с расходами: {float(context.get('actual_planned_risk_percent') or context.get('risk_percent') or 0):.3f}%\n"
         f"├ Трейлинг: <code>{float(position.trailing_stop_percent):.2f}%</code>\n"
         f"└ Безубыток: {float(position.breakeven_trigger_r or 1.0):.2f}R · частичная фиксация "
         f"{float(position.partial_close_percent or 50.0):.0f}% при {float(position.partial_take_profit_r or 1.0):.2f}R\n\n"

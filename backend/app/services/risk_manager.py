@@ -136,6 +136,10 @@ class RiskManager:
         if not math.isfinite(cost_per_unit) or cost_per_unit < 0:
             return 0.0
         loss_budget = float(balance) * float(risk_percent) / 100
+        if max_risk_percent is not None:
+            if not self._is_positive_finite(max_risk_percent):
+                return 0.0
+            loss_budget = min(loss_budget, float(balance) * max_risk_percent / 100)
         price_risk = abs(float(entry_price) - float(stop_price))
         if price_risk <= 0:
             return 0.0
