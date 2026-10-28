@@ -384,6 +384,16 @@ async def _close_position_locked(
         raise HTTPException(status_code=404, detail="Position not found")
     if position.status != "OPEN":
         raise HTTPException(status_code=409, detail="Position is already closed")
+    if (position.entry_context or {}).get("exit_experiment"):
+        from app.services.trading_engine import TradingEngine
+        engine = TradingEngine()
+        engine.execution = execution
+        engine.exchange = execution.exchange
+        await engine._close_position(db, position, position.current_price, "MANUAL")
+        await db.commit()
+        if position.status != "CLOSED":
+            raise HTTPException(status_code=409, detail="Experiment close blocked or awaiting reconciliation")
+        return position
     pending_order = (
         await db.execute(
             select(Order)

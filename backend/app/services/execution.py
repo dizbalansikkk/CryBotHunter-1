@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.entities import Order, OrderStatus, Position
 from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumError
+from app.services import exit_experiment as experiment
 
 
 class ExitSizeAssessment:
@@ -52,6 +53,7 @@ class ExecutionService:
         *,
         paper_learning: bool = False,
         min_notional: float = 0.0,
+        experiment_plan: dict | None = None,
     ) -> Order:
         guarded = select(Position.id).where(
             Position.status == "OPEN",
@@ -81,6 +83,9 @@ class ExecutionService:
         db.add(order)
         await db.flush()
         try:
+            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False):
+                if not self.settings.paper_trading or not experiment_plan:
+                    raise ValueError("Experiment entry requires approved paper SL/TP plan; live protection unavailable")
             reduce_only = reason.startswith("EXIT") or reason.startswith("PARTIAL_TAKE_PROFIT")
             derivatives_check = getattr(self.exchange, "is_derivatives_market", None)
             is_derivatives = (
@@ -142,6 +147,15 @@ class ExecutionService:
             if prepared_order.amount * fill_price_floor + 1e-10 < min_notional:
                 raise OrderMinimumError("Normalized entry notional is below configured minimum")
             order.requested_amount = prepared_order.amount
+            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False):
+                direction = 1 if side.lower() == "buy" else -1
+                expected_entry = reference_price * (1 + direction * self.settings.paper_slippage_bps / 10000)
+                check = experiment.projection("LONG" if direction == 1 else "SHORT", expected_entry,
+                    prepared_order.amount, experiment_plan["stop"], experiment_plan["take"],
+                    max(prepared_order.fee_rate, self.settings.paper_fee_rate), experiment_plan["slippage_bps"])
+                if not experiment.compliant(check):
+                    raise ValueError("Normalized order violates experiment limits")
+                order.raw = {**order.raw, "exit_experiment_preflight": check}
             order.raw = {
                 **(order.raw or {}),
                 "exchange_metadata": {

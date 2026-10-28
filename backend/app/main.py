@@ -80,6 +80,11 @@ async def deep_health() -> dict[str, object]:
     checks["live_trading_enabled"] = settings.live_trading_enabled
     checks["exchange_sandbox_enabled"] = settings.exchange_sandbox_enabled
     checks["allow_live_trading_without_sandbox"] = settings.allow_live_trading_without_sandbox
+    checks["experimental_exit_limits_enabled"] = settings.experimental_exit_limits_enabled
+    if settings.experimental_exit_limits_enabled:
+        from app.services.exit_experiment import MAX_LOSS, TARGET_PROFIT
+        checks["exit_experiment"] = {"max_loss_usdt": MAX_LOSS, "target_profit_usdt": TARGET_PROFIT,
+            "live_entries_allowed": False, "protection": "PAPER_LOCAL_SL_TP" if settings.paper_trading else "LIVE_BLOCKED"}
     checks["market_data_mode"] = settings.market_data_mode
     checks["llm_provider"] = settings.llm_provider
     return checks

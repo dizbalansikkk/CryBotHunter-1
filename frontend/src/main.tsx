@@ -2384,6 +2384,8 @@ function translateStatus(value: string) {
     OPEN: "Открыта",
     CLOSED: "Закрыта",
     STOP_LOSS: "Стоп-лосс",
+    EXPERIMENT_LOSS_LIMIT: "Лимит убытка эксперимента",
+    EXPERIMENT_PROTECTION_FAILED: "Нарушение защиты эксперимента",
     TRAILING_STOP: "Трейлинг-стоп",
     BREAKEVEN_STOP: "Стоп безубытка",
     PROFIT_PROTECTION_STOP: "Стоп защиты прибыли",

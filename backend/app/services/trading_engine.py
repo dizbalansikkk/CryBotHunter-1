@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import math
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import logging
@@ -20,6 +21,7 @@ from app.services.counterfactual import CounterfactualService
 from app.services.derivatives_context import DerivativesContextService
 from app.services.exchange import ExchangeClient
 from app.services.execution import ExecutionService
+from app.services import exit_experiment as experiment
 from app.services.learning import LearningService
 from app.services.market_quality import MarketQualityGate
 from app.services.market_scanner import MarketScanner
@@ -741,6 +743,8 @@ class TradingEngine:
                     "EMERGENCY_DRAWDOWN",
                     cycle_id=cycle_id,
                 )
+            elif experiment.active(position) and await self._experiment_liquidation_pnl(db, position, price) <= -experiment.MAX_LOSS:
+                await self._close_position(db, position, price, "EXPERIMENT_LOSS_LIMIT", cycle_id=cycle_id)
             elif self._exit_reason(position):
                 # Already-crossed levels take precedence over new partial orders
                 # and stop replacement. Never delay a crossed stop for an ACK.
@@ -1145,6 +1149,29 @@ class TradingEngine:
         )
         if volume <= 0:
             return None
+        experiment_plan = None
+        if getattr(self.settings, "experimental_exit_limits_enabled", False):
+            # Live entry remains forbidden until BOTH native SL and TP can be
+            # reconciled. Paper local protection is never called exchange ACK.
+            if not self.settings.paper_trading:
+                self._log_trading_event(db, "WARNING", "EXPERIMENT_ENTRY_REJECTED",
+                    "Experiment requires confirmed native SL and TP; live entry disabled", symbol=coin.symbol)
+                return None
+            direction = 1 if side == "LONG" else -1
+            forecast_entry = coin.price * (1 + direction * self.settings.paper_slippage_bps / 10000)
+            planned_stop, planned_take, _ = self._exit_plan(forecast_entry, coin.atr, side, settings)
+            friction = max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps) + max(float(coin.spread_bps or 0), 0) / 2
+            unit = experiment.projection(side, forecast_entry, 1, planned_stop, planned_take,
+                self.settings.paper_fee_rate, friction)
+            volume = math.floor(min(volume, (experiment.MAX_LOSS - .000001) / unit["loss"]) * 1e8) / 1e8
+            assessment = experiment.projection(side, forecast_entry, volume, planned_stop, planned_take,
+                self.settings.paper_fee_rate, friction) if volume > 0 else {"loss": 0, "profit": 0}
+            if not experiment.compliant(assessment):
+                self._log_trading_event(db, "INFO", "EXPERIMENT_ENTRY_REJECTED",
+                    "Existing strategy target cannot meet experiment net profit and loss limits", symbol=coin.symbol, **assessment)
+                return None
+            experiment_plan = {"stop": planned_stop, "take": planned_take, "slippage_bps": friction,
+                "max_loss": experiment.MAX_LOSS, "target_profit": experiment.TARGET_PROFIT, **assessment}
         pre_entry_sizing = self._entry_sizing(coin, signal, balance, settings)
         preflight_plan = await self._assess_scale_out_plan(
             coin.symbol, self._initial_scale_out_plan(
@@ -1163,6 +1190,7 @@ class TradingEngine:
             "ENTRY",
             paper_learning=paper_exploration,
             min_notional=self.settings.min_entry_notional_usdt,
+            experiment_plan=experiment_plan,
         )
         if entry_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not entry_order.average_price:
             return None
@@ -1176,6 +1204,9 @@ class TradingEngine:
         entry_context["exit_fill_ledger_version"] = 1
         entry_context["exit_fills"] = []
         entry_context["execution_mode"] = "PAPER" if self.settings.paper_trading else "LIVE"
+        if experiment_plan:
+            entry_context["exit_experiment"] = {**experiment_plan, "protection_mode": "PAPER_LOCAL_SL_TP",
+                "exchange_acknowledged": False}
         entry_context["exit_plan"] = {
             "initial_stop": stop,
             "initial_take": take,
@@ -1266,6 +1297,10 @@ class TradingEngine:
                               max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps)
                               + max(float(coin.spread_bps or 0), 0) / 2) / 10_000)
         entry_context["configured_price_reward_risk"] = settings.risk_reward_ratio
+        if experiment_plan:
+            actual_projection = experiment.projection(side, entry_price, volume, stop, take,
+                exit_fee_rate, experiment_plan["slippage_bps"], entry_fee=entry_order.fee)
+            planned_risk, planned_reward = actual_projection["loss"], actual_projection["profit"]
         entry_context["gross_target_reward"] = gross_reward
         entry_context["reward_assumption"] = "full_exit_at_final_target_after_estimated_costs; scale_outs_and_trailing_change_outcome"
         entry_context.update(
@@ -1291,6 +1326,8 @@ class TradingEngine:
             tp1_percent=settings.partial_close_percent,
             initial_risk=initial_risk, tp1_r=settings.partial_take_profit_r,
         )
+        if experiment_plan:
+            actual_plan = {**actual_plan, "mode": "MONOLITHIC", "reason": "EXPERIMENT_FULL_NET_TARGET"}
         entry_context["scale_out"] = (
             {**actual_plan, "mode": "MONOLITHIC", "preflight": preflight_plan.get("preflight")}
             if preflight_plan["mode"] == "MONOLITHIC"
@@ -1319,6 +1356,18 @@ class TradingEngine:
         db.add(position)
         await db.flush()
         db.add(Trade(position_id=position.id, symbol=coin.symbol, side=side, entry_price=entry_price, exit_price=None, profit=-entry_order.fee))
+        if experiment_plan:
+            verified = experiment.projection(side, entry_price, volume, stop, take, exit_fee_rate,
+                experiment_plan["slippage_bps"], entry_fee=entry_order.fee)
+            position.entry_context = {**position.entry_context, "exit_experiment": {
+                **position.entry_context["exit_experiment"], "post_fill": verified,
+                "initial_volume": volume, "initial_stop": stop, "initial_take": take}}
+            if not experiment.compliant(verified):
+                self._log_trading_event(db, "ERROR", "EXPERIMENT_PROTECTION_FAILED",
+                    "Actual entry fill invalidates approved risk/target; emergency unwind",
+                    position_id=position.id, symbol=position.symbol, **verified)
+                await self._close_position(db, position, entry_price, "EXPERIMENT_PROTECTION_FAILED")
+                return None
         record_excursion(position, -entry_order.fee, from_entry=True)
         protected = await self._replace_protective_stop(
             db,
@@ -1635,6 +1684,8 @@ class TradingEngine:
         *,
         cycle_id: str | None = None,
     ) -> float:
+        if experiment.active(position):
+            return 0.0
         if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
             return 0.0
         if (self._scale_out_state(position).get("mode") == "MONOLITHIC"
@@ -1747,6 +1798,8 @@ class TradingEngine:
         *,
         cycle_id: str | None = None,
     ) -> float:
+        if experiment.active(position):
+            return 0.0
         """Execute TP2 only after a filled TP1 and a confirmed scale-out plan."""
         if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
             return 0.0
@@ -1854,9 +1907,9 @@ class TradingEngine:
         risk = self._original_price_risk(position)
         multiple = self._finite_float(position.partial_take_profit_r) or 1.0
         r_price = position.entry_price + (1 if position.side == "LONG" else -1) * risk * multiple
-        planned = self._scale_out_price(position, "tp1_price", r_price)
-        cost_floor = self._break_even_price(position)
-        trigger = max(planned, r_price, cost_floor) if position.side == "LONG" else min(planned, r_price, cost_floor)
+        # R is the configured price distance, not a net-profit/cost target.
+        # Stored legacy targets and break-even estimates must not move it.
+        trigger = r_price
         if position.side == "LONG":
             return price >= trigger
         return price <= trigger
@@ -1891,7 +1944,7 @@ class TradingEngine:
         """
         if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
             return "PENDING"
-        if not getattr(self.settings, "dynamic_take_profit_enabled", True):
+        if experiment.active(position) or not getattr(self.settings, "dynamic_take_profit_enabled", True):
             return "CLOSE"
         state = self._dynamic_take_state(position)
         extensions = max(int(self._finite_float(state.get("extensions", 0))), 0)
@@ -2105,6 +2158,19 @@ class TradingEngine:
         record_excursion(position, position.pnl)
         return closed_volume, round(partial_profit, 4)
 
+    async def _experiment_liquidation_pnl(self, db, position, price):
+        state = (position.entry_context or {}).get("exit_experiment", {})
+        slip = max(float(state.get("slippage_bps", 0)), self.settings.paper_slippage_bps,
+                   self.settings.execution_market_impact_bps) / 10000
+        direction = 1 if position.side == "LONG" else -1
+        fill = price * (1 - direction * slip)
+        entry = (position.entry_context or {}).get("entry_execution", {})
+        fee_rate = max(self.settings.paper_fee_rate,
+            float(entry.get("fee", 0)) / max(position.entry_price * float(entry.get("volume", position.volume)), 1e-12))
+        return (await self._position_profit_sum(db, position.id)
+                + direction * (fill - position.entry_price) * position.volume
+                - fill * position.volume * fee_rate)
+
     async def _close_position(
         self,
         db: AsyncSession,
@@ -2115,6 +2181,13 @@ class TradingEngine:
         cycle_id: str | None = None,
         exit_order: Order | None = None,
     ) -> None:
+        if experiment.active(position) and exit_order is None and reason in {"TAKE_PROFIT", "MANUAL"}:
+            estimate = await self._experiment_liquidation_pnl(db, position, exit_price)
+            if estimate <= experiment.MIN_PROFIT and (reason == "TAKE_PROFIT" or estimate > 0):
+                self._log_trading_event(db, "INFO", "EXPERIMENT_EXIT_REJECTED",
+                    "Voluntary profitable exit below experiment minimum", position_id=position.id,
+                    symbol=position.symbol, estimated_net=estimate, exit_reason=reason)
+                return
         if (position.entry_context or {}).get("exit_failure", {}).get("review_required"):
             await self._review_failed_exit(db, position)
             return
@@ -2218,7 +2291,7 @@ class TradingEngine:
         position.pnl = self._total_closed_profit(previous_realized, final_trade_profit)
         record_excursion(position, position.pnl, at=position.closed_at, final=True)
         if reason in {"STOP_LOSS", "BREAKEVEN_STOP", "TRAILING_STOP", "PROFIT_PROTECTION_STOP",
-                      "DYNAMIC_TAKE_PROFIT_STOP", "EMERGENCY_DRAWDOWN"}:
+                      "DYNAMIC_TAKE_PROFIT_STOP", "EMERGENCY_DRAWDOWN", "EXPERIMENT_LOSS_LIMIT"}:
             self._record_stop_slippage_observation(
                 db,
                 position,
@@ -2231,6 +2304,29 @@ class TradingEngine:
                 cycle_id=cycle_id,
             )
         self._record_exit_fill(position, exit_order)
+        if experiment.active(position):
+            state = position.entry_context["exit_experiment"]
+            fills = position.entry_context.get("exit_fills", [])
+            entry = position.entry_context.get("entry_execution", {})
+            below_target = 0 < position.pnl < experiment.TARGET_PROFIT
+            loss_breach = position.pnl < -experiment.MAX_LOSS
+            audit = {"symbol": position.symbol, "side": position.side,
+                "entry_price": position.entry_price, "exit_price": exit_order.average_price,
+                "initial_volume": state.get("initial_volume"), "initial_stop": state.get("initial_stop"),
+                "initial_take": state.get("initial_take"), "final_stop": position.stop,
+                "net_pnl": position.pnl, "exit_reason": reason,
+                "fees": float(entry.get("fee", 0)) + sum(float(f.get("fee", 0)) for f in fills),
+                "slippage_cost": float(entry.get("slippage", 0)) * float(entry.get("volume", 0))
+                    + sum(float(f.get("slippage", 0)) * float(f.get("volume", 0)) for f in fills),
+                "loss_breach": loss_breach, "profit_below_target": below_target,
+                "protective_exception": reason not in {"TAKE_PROFIT", "MANUAL"},
+                "protection_mode": state.get("protection_mode"), "funding_included": False}
+            position.entry_context = {**position.entry_context, "experiment_result": audit}
+            self._log_trading_event(db, "WARNING" if loss_breach or below_target else "INFO",
+                "EXPERIMENT_DEVIATION" if loss_breach or below_target else "EXPERIMENT_RESULT",
+                "Experiment settlement: actual fills, fees and deviation reason", position_id=position.id, **audit)
+            if loss_breach or (below_target and not audit["protective_exception"]):
+                await self.control.panic(f"experiment_deviation:{position.id}:{reason}:{position.pnl}")
         try:
             post_mortem = await self.post_mortem.analyze_trade(db, position, exit_order, reason)
             if post_mortem:
@@ -2371,7 +2467,7 @@ class TradingEngine:
         # TP1's confirmed fill is the only event that may arm this transition.
         # It prevents an unfilled/failed partial order from being treated as
         # profit that can protect the remaining position.
-        if not position.partial_taken:
+        if not position.partial_taken and not experiment.active(position):
             return False
         direction = 1 if position.side == "LONG" else -1
         trigger_r = self._finite_float(position.breakeven_trigger_r) or 1.0
@@ -2423,7 +2519,7 @@ class TradingEngine:
             "requested_offset_percent": round(requested_offset, 4),
             "effective_offset_percent": round(effective_offset, 4),
             "price_bu": round(price_bu, 8),
-            "trigger": "TP1_FILLED",
+            "trigger": "CONFIGURED_R" if experiment.active(position) else "TP1_FILLED_AND_CONFIGURED_R",
         }
         position.entry_context = context
 
@@ -2795,10 +2891,8 @@ class TradingEngine:
         initial_risk: float | None = None,
         tp1_r: float = 1.0,
     ) -> dict:
-        price_bu = self._break_even_price_from_values(side, entry_price, entry_volume, entry_fee)
         risk = initial_risk if initial_risk is not None else abs(strategy_take - entry_price) / 2
-        first = entry_price + (1 if side == "LONG" else -1) * risk * max(tp1_r, 0.0001)
-        first = max(first, price_bu) if side == "LONG" else min(first, price_bu)
+        first = entry_price + (1 if side == "LONG" else -1) * risk * tp1_r
         distance_percent = min(
             max(self._finite_float(getattr(self.settings, "scale_out_tp2_distance_percent", 1.25)), 1.0),
             1.5,
@@ -2816,7 +2910,7 @@ class TradingEngine:
             "tp2_price": round(max(tp2, entry_price * 0.0001), 8),
             "tp2_percent": round(min(max(self._finite_float(getattr(self.settings, "scale_out_tp2_percent", 35.0)), 30.0), 40.0), 4),
             "tp3_price": round(float(strategy_take), 8),
-            "price_basis": "TP1=configured R with cost floor; TP2=fixed percentage; invalid target order uses full exit",
+            "price_basis": "TP1=exact configured price R; TP2=fixed percentage; invalid target order uses full exit",
         }
 
     def _scale_out_state(self, position: Position) -> dict:

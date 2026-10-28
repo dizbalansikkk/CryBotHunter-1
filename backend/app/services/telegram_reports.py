@@ -11,6 +11,8 @@ from app.services.telegram_daily import DailyReportSnapshot
 
 
 EXIT_REASON_LABELS = {
+    "EXPERIMENT_LOSS_LIMIT": "достигнут лимит убытка эксперимента",
+    "EXPERIMENT_PROTECTION_FAILED": "риск после входа не соответствует эксперименту",
     "TRAILING_STOP": "сработал трейлинг-стоп",
     "BREAKEVEN_STOP": "сработал стоп безубытка",
     "PROFIT_PROTECTION_STOP": "сработал стоп защиты прибыли",
