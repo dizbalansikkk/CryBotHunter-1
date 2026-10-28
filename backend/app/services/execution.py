@@ -86,6 +86,10 @@ class ExecutionService:
             if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False):
                 if not self.settings.paper_trading or not experiment_plan:
                     raise ValueError("Experiment entry requires approved paper SL/TP plan; live protection unavailable")
+                existing = (await db.execute(select(Position.id).where(
+                    Position.symbol == symbol, Position.status == "OPEN").limit(1))).scalar_one_or_none()
+                if existing is not None:
+                    raise ValueError("Experiment forbids adding exposure to an existing symbol")
             reduce_only = reason.startswith("EXIT") or reason.startswith("PARTIAL_TAKE_PROFIT")
             derivatives_check = getattr(self.exchange, "is_derivatives_market", None)
             is_derivatives = (
