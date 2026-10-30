@@ -30,7 +30,7 @@ async def test_rl_gate_blocks_fresh_confident_opposite_signal(monkeypatch):
     monkeypatch.setattr(gate.settings, "rl_gate_enabled", True)
     monkeypatch.setattr(gate.settings, "rl_gate_min_confidence", 0.55)
 
-    result = await gate.assess(FakeDb(SimpleNamespace(action="SELL", confidence=0.8)), "BTC/USDT", "BUY")
+    result = await gate.assess(FakeDb(SimpleNamespace(action="SELL", confidence=0.8, context={"feature_schema_version": 3})), "BTC/USDT", "BUY")
 
     assert result.allowed is False
     assert result.risk_multiplier == 0
@@ -43,7 +43,7 @@ async def test_rl_gate_reduces_risk_for_wait(monkeypatch):
     monkeypatch.setattr(gate.settings, "rl_gate_min_confidence", 0.55)
     monkeypatch.setattr(gate.settings, "rl_wait_risk_multiplier", 0.5)
 
-    result = await gate.assess(FakeDb(SimpleNamespace(action="WAIT", confidence=0.8)), "BTC/USDT", "BUY")
+    result = await gate.assess(FakeDb(SimpleNamespace(action="WAIT", confidence=0.8, context={"feature_schema_version": 3})), "BTC/USDT", "BUY")
 
     assert result.allowed is True
     assert result.risk_multiplier == 0.5

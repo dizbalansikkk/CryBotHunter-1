@@ -33,7 +33,7 @@ def losing_position(reason: str = "STOP_LOSS") -> Position:
     )
 
 
-def test_valid_stop_gets_discipline_credit_instead_of_behavior_penalty():
+def test_valid_stop_is_labelled_but_gets_no_positive_reward_bonus():
     service = PostMortemService(Exchange())
     position = losing_position()
     labels, followed = service.classify(
@@ -47,8 +47,8 @@ def test_valid_stop_gets_discipline_credit_instead_of_behavior_penalty():
 
     assert labels == ["VALID_STOP"]
     assert followed is True
-    assert components["risk_discipline"] == 0.35
-    assert sum(components.values()) == -0.65
+    assert "risk_discipline" not in components
+    assert sum(components.values()) == -1
 
 
 def test_post_mortem_labels_avoidable_entry_and_hold_errors():

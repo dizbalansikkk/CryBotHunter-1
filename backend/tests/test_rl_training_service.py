@@ -92,9 +92,8 @@ async def test_training_moves_cpu_bound_candidate_search_off_event_loop(monkeypa
 
     fake_model = object()
 
-    def train_candidates(train_frame, validation_frame):
-        assert len(train_frame) == 1500
-        assert len(validation_frame) == 500
+    def train_candidates(frame):
+        assert len(frame) == 2000
         return fake_model, {
             "return_percent": 1.0,
             "excess_return_percent": -1.0,
@@ -104,7 +103,7 @@ async def test_training_moves_cpu_bound_candidate_search_off_event_loop(monkeypa
             "trades": 10,
         }
 
-    monkeypatch.setattr(service, "_train_candidates", train_candidates)
+    monkeypatch.setattr(service, "_train_walk_forward", train_candidates)
     monkeypatch.setattr(service, "_serialize", lambda model: b"artifact" if model is fake_model else b"")
     stored_decisions: list[str] = []
 
@@ -160,6 +159,7 @@ def test_promotion_requires_benchmark_edge_and_seed_stability():
         rl_max_validation_drawdown_percent=15.0,
     )
     strong = {
+        "validation_method": "PURGED_WALK_FORWARD", "walk_forward_folds": [{}, {}],
         "return_percent": 4.0,
         "excess_return_percent": 1.5,
         "profitable_seed_ratio": 1.0,
@@ -184,7 +184,7 @@ async def test_shadow_promotion_requires_both_backtest_and_forward_evidence(monk
         timeframe="1h",
         status="SHADOW",
         is_active=False,
-        metrics={"backtest_passed": True},
+        feature_schema={"version": 3}, metrics={"backtest_passed": True},
         created_at=datetime.now(timezone.utc),
     )
 
@@ -228,7 +228,7 @@ async def test_shadow_promotion_requires_both_backtest_and_forward_evidence(monk
 @pytest.mark.asyncio
 async def test_shadow_without_backtest_edge_never_promotes(monkeypatch):
     service = RlTrainingService()
-    record = SimpleNamespace(metrics={"backtest_passed": False})
+    record = SimpleNamespace(feature_schema={"version": 3}, metrics={"backtest_passed": False})
 
     async def shadow_for(_db, _symbol, _timeframe):
         return record
@@ -269,7 +269,7 @@ async def test_candidate_cannot_replace_incumbent_without_comparative_evidence(m
     service = RlTrainingService()
     service.settings = SimpleNamespace(shadow_forward_max_trial_days=7, shadow_forward_min_trades=20)
     candidate = RlModel(id=2, symbol="ETH/USDT", timeframe="1h", status="SHADOW", is_active=False,
-        metrics={"backtest_passed": True}, created_at=datetime.now(timezone.utc))
+        feature_schema={"version": 3}, metrics={"backtest_passed": True}, created_at=datetime.now(timezone.utc))
     async def shadow(*args): return candidate
     async def active(*args): return RlModel(id=1, status="ACTIVE", is_active=True)
     async def report(*args):

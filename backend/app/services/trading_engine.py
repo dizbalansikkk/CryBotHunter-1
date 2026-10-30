@@ -154,6 +154,8 @@ class TradingEngine:
             await db.commit()
             return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
         coins = await self.derivatives_context.enrich(db, await self.scanner.scan())
+        from app.services.market_features import collect_hourly_features
+        await collect_hourly_features(db, coins, self.exchange, self.microstructure)
         if self.settings.regime_strategy_shadow_enabled:
             routed_coins: list[MarketCoin] = []
             for coin in coins:

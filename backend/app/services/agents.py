@@ -549,6 +549,9 @@ class AgentOrchestrator:
                     self.event_risk_agent.decide(coin, event_context),
                 ]
             )
+        market = self._competition_context(market, profiles)
+        llm = self._competition_context(llm, profiles) if llm else None
+        committee = [self._competition_context(item, profiles) for item in committee]
         candidate, consensus_score = self._committee_consensus(market, llm, committee)
         risk = await self.risk_agent.decide(db, candidate)
         risk = self._apply_committee_risk_reduction(risk, committee)
@@ -632,20 +635,22 @@ class AgentOrchestrator:
                 0,
             )
 
-        candidate = self._combine(market, llm)
-        if candidate.action not in {"BUY", "SELL"}:
-            return candidate, 0
-
         directional_votes = [
-            decision for decision in [market, *committee]
+            decision for decision in [market, *committee, *([llm] if llm else [])]
             if decision.action in {"BUY", "SELL"}
             and decision.context.get("competition_status") in {None, "CHAMPION"}
+            and float(decision.context.get("vote_weight", .25)) > 0
         ]
+        signed_score = sum((1 if d.action == "BUY" else -1) * float(d.context.get("vote_weight", .25)) for d in directional_votes)
+        candidate = market.model_copy(update={"action": "BUY" if signed_score > 0 else "SELL" if signed_score < 0 else "WAIT"})
+        if candidate.action == "WAIT":
+            return candidate, 0
+        candidate = max((d for d in directional_votes if d.action == candidate.action),
+            key=lambda d: float(d.context.get("vote_weight", .25)))
         agreeing = [decision for decision in directional_votes if decision.action == candidate.action]
         opposing = [decision for decision in directional_votes if decision.action != candidate.action]
         vote_mass = lambda decision: (
-            float(decision.context.get("vote_weight", 1.0))
-            * max(min(float(decision.confidence), 1.0), 0.05)
+            float(decision.context.get("vote_weight", .25))
         )
         total_weight = sum(vote_mass(decision) for decision in directional_votes)
         agreeing_weight = sum(vote_mass(decision) for decision in agreeing)
@@ -678,6 +683,7 @@ class AgentOrchestrator:
                     ),
                     context={
                         "candidate_action": candidate.action,
+                        "signed_trust_score": round(signed_score, 6),
                         "agreeing_agents": [decision.agent_name for decision in agreeing],
                         "opposing_agents": [decision.agent_name for decision in opposing],
                         "strong_opposing_agents": strong_opposing,
@@ -703,6 +709,7 @@ class AgentOrchestrator:
                 context={
                     "agreeing_agents": [decision.agent_name for decision in agreeing],
                     "consensus_score": round(consensus_score, 2),
+                    "signed_trust_score": round(signed_score, 6),
                     "agreeing_families": sorted(agreeing_families),
                     "support_weight": round(agreeing_weight, 4),
                     "opposition_weight": round(opposing_weight, 4),
@@ -760,6 +767,7 @@ class AgentOrchestrator:
     ) -> AgentDecisionOut:
         profile = profiles.get(decision.agent_name)
         if not profile:
+            decision.context.update({"vote_weight": .25, "trust_score": .25, "trust_samples": 0})
             return decision
         decision.context.update(
             {
@@ -768,6 +776,8 @@ class AgentOrchestrator:
                 "performance_rating": profile.rating,
                 "performance_observations": profile.observations,
                 "vote_weight": profile.vote_weight if profile.status == "CHAMPION" else 0.0,
+                "trust_score": profile.vote_weight,
+                "trust_samples": profile.trust_samples,
                 "competition_explanation": (
                     "Основной аналитик влияет на решение комитета."
                     if profile.status == "CHAMPION"

@@ -92,6 +92,10 @@ async def deep_health() -> dict[str, object]:
             "live_entries_allowed": False, "protection": "PAPER_LOCAL_SL_TP" if settings.paper_trading else "LIVE_BLOCKED"}
     checks["market_data_mode"] = settings.market_data_mode
     checks["llm_provider"] = settings.llm_provider
+    checks["agent_learning_policy"] = {"trust_window": 50, "reward_version": 3,
+        "feature_schema_version": 3, "validation": "PURGED_WALK_FORWARD_90D_30D",
+        "liquidation_zone_provider_configured": False,
+        "new_rl_training": "BLOCKED_UNTIL_POINT_IN_TIME_FEATURE_COVERAGE"}
     return checks
 
 

@@ -85,6 +85,8 @@ class DerivativesContextService:
             "open_interest_change_percent": round(oi_change, 4) if oi_change is not None else None,
             "long_short_ratio": snapshot.long_short_ratio,
             "liquidation_notional": snapshot.liquidation_notional,
+            "liquidation_long_distance": self._optional(payload.get("liquidation_long_distance")),
+            "liquidation_short_distance": self._optional(payload.get("liquidation_short_distance")),
             "errors": list(payload.get("errors") or []),
             "observed_at": snapshot.captured_at.isoformat(),
         }

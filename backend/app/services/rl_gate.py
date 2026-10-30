@@ -37,6 +37,8 @@ class RlDecisionGate:
         ).scalars().first()
         if not decision:
             return RlGateAssessment(True, 1.0, "no fresh promoted RL decision")
+        if (getattr(decision, "context", None) or {}).get("feature_schema_version") != 3:
+            return RlGateAssessment(True, 1.0, "legacy RL schema has no voting authority")
         if decision.confidence < self.settings.rl_gate_min_confidence:
             return RlGateAssessment(True, self.settings.rl_wait_risk_multiplier, "RL confidence is below promotion gate")
         if decision.action == signal:

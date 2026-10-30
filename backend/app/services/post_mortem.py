@@ -285,8 +285,7 @@ class PostMortemService:
         strategy_followed: bool,
     ) -> dict[str, float]:
         components = {"financial_outcome": round(max(min(result_r, 3.0), -3.0), 4)}
-        if reason == "STOP_LOSS":
-            components["risk_discipline"] = 0.35 if strategy_followed else 0.15
+        # A correct stop is a diagnostic label, never a positive PnL bonus.
         penalties = {
             "EARLY_EXIT_FROM_PROFIT": -0.75,
             "HELD_AFTER_EARLY_INVALIDATION": -0.6,

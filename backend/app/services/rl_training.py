@@ -21,6 +21,8 @@ from app.services.history import HistoricalDataService
 from app.services.post_mortem import BadExperienceReplay
 from app.services.rl_environment import FEATURE_NAMES, CryptoTradingEnv, build_feature_frame, latest_observation
 from app.services.shadow_trading import ShadowTradingService
+from app.services.market_features import load_market_features, MICRO_FEATURES
+from app.services.walk_forward import walk_forward_windows
 
 
 ACTION_NAMES = ("WAIT", "BUY", "SELL")
@@ -126,9 +128,11 @@ class RlTrainingService:
         ).scalars().first()
 
     async def train_symbol(self, db: AsyncSession, symbol: str, timeframe: str = "1h") -> RlModel:
+        if timeframe != "1h":
+            raise RuntimeError("Feature schema v3 supports only the validated 1h decision clock")
         if not self.settings.uses_live_market_data:
             raise RuntimeError("RL training refuses synthetic market data; use MARKET_DATA_MODE=ccxt")
-        limit = max(self.settings.rl_training_limit, self.settings.rl_min_training_candles)
+        limit = max(self.settings.rl_training_limit, self.settings.rl_min_training_candles, 24 * 180 + 100)
         candles = await self.history.load(db, symbol, timeframe, limit=limit, source="ccxt", closed_only=True)
         if len(candles) < self.settings.rl_min_training_candles:
             await self.history.ingest(db, symbol, timeframe, limit=limit)
@@ -145,15 +149,17 @@ class RlTrainingService:
             "max_replay_weight": 1.0,
         }
         if isinstance(frame, pd.DataFrame):
-            frame, replay_metrics = await self.bad_replay.apply(db, symbol, frame)
+            frame = await load_market_features(db, symbol, frame)
+            coverage = {name: float(frame[name + "_available"].mean()) for name in MICRO_FEATURES}
+            if min(coverage.values()) < .8:
+                raise RuntimeError(f"Point-in-time microstructure coverage below 80%; cannot validate new model: {coverage}")
         train_frame, validation_frame = self._split(frame)
         # Stable Baselines3/PyTorch are CPU-bound and synchronous. Keeping this
         # work off the asyncio event loop lets the heartbeat, shutdown handling,
         # and other database work continue while a model is learning.
         best_model, metrics = await asyncio.to_thread(
-            self._train_candidates,
-            train_frame,
-            validation_frame,
+            self._train_walk_forward,
+            frame,
         )
         metrics["market_data_source"] = "ccxt"
         metrics.update(replay_metrics)
@@ -174,10 +180,10 @@ class RlTrainingService:
             algorithm="PPO",
             status="SHADOW",
             is_active=False,
-            training_candles=len(train_frame),
-            validation_candles=len(validation_frame),
+            training_candles=metrics.get("training_candles", len(train_frame)),
+            validation_candles=metrics.get("validation_candles", len(validation_frame)),
             metrics=metrics,
-            feature_schema={"features": FEATURE_NAMES, "actions": list(ACTION_NAMES), "version": 2},
+            feature_schema={"features": FEATURE_NAMES, "actions": list(ACTION_NAMES), "version": 3, "reward_version": 3},
             artifact=artifact,
         )
         db.add(record)
@@ -195,6 +201,41 @@ class RlTrainingService:
         await db.commit()
         await db.refresh(record)
         return record
+
+    def _train_walk_forward(self, frame):
+        folds = walk_forward_windows(frame)
+        results = []
+        model = None
+        for train, test in folds:
+            self._raise_if_stopping()
+            for name in MICRO_FEATURES:
+                if min(float(train[name + "_available"].mean()), float(test[name + "_available"].mean())) < .8:
+                    raise ValueError(f"Insufficient point-in-time {name} coverage in fold")
+            inner_train, inner_validation = self._split(train)
+            inner_train = inner_train.iloc[:-1].reset_index(drop=True)
+            # Seeds are selected only on an inner validation period. The outer
+            # test never selects a seed, settings or candidate for this fold.
+            model, selection = self._train_candidates(inner_train, inner_validation)
+            outer = self._evaluate(model, test)
+            benchmark = self._buy_hold_return(test)
+            outer.update({"train_start": str(train.timestamp.iloc[0]), "train_end": str(train.timestamp.iloc[-1]),
+                "training_candles": len(inner_train), "validation_candles": len(test),
+                "test_start": str(test.timestamp.iloc[0]), "test_end": str(test.timestamp.iloc[-1]),
+                "excess_return_percent": outer["return_percent"] - benchmark,
+                "profitable_seed_ratio": selection["profitable_seed_ratio"],
+                "selected_seed": selection.get("seed")})
+            results.append(outer)
+        # Conservative promotion: every outer window must pass. Deploy the last
+        # fold's already-tested model, not a refit on the held-out observations.
+        metrics = dict(results[-1])
+        metrics.update({"walk_forward_folds": results, "validation_method": "PURGED_WALK_FORWARD",
+            "return_percent": min(r["return_percent"] for r in results),
+            "excess_return_percent": min(r["excess_return_percent"] for r in results),
+            "profit_factor": min(r["profit_factor"] for r in results),
+            "trades": min(r["trades"] for r in results),
+            "max_drawdown_percent": max(r["max_drawdown_percent"] for r in results),
+            "profitable_seed_ratio": min(r["profitable_seed_ratio"] for r in results)})
+        return model, metrics
 
     def _train_candidates(self, train_frame, validation_frame) -> tuple[PPO, dict]:
         started = perf_counter()
@@ -325,6 +366,10 @@ class RlTrainingService:
 
     async def evaluate_shadow_promotion(self, db: AsyncSession, symbol: str, timeframe: str) -> str:
         record = await self.shadow_for(db, symbol, timeframe)
+        if record and (record.feature_schema or {}).get("version") != 3:
+            record.is_active = False
+            record.status = "REJECTED"
+            return "REJECTED"
         if not record or not bool((record.metrics or {}).get("backtest_passed")):
             return "NONE"
         report = await self.shadow_trading.report(db, record.id)
@@ -389,13 +434,19 @@ class RlTrainingService:
     ) -> tuple[AgentDecision | None, AgentDecision | None]:
         active_record = await self.active_for(db, symbol, timeframe)
         shadow_record = await self.shadow_for(db, symbol, timeframe)
-        records = [record for record in (active_record, shadow_record) if record and record.artifact]
+        records = [record for record in (active_record, shadow_record) if record and record.artifact
+                   and (record.feature_schema or {}).get("version") == 3]
         if not records:
             return None, None
+        if timeframe != "1h":
+            return None, None
         await self.history.ingest(db, symbol, timeframe, limit=300)
-        candles = await self.history.load(db, symbol, timeframe, limit=300, source="ccxt")
+        candles = await self.history.load(db, symbol, timeframe, limit=300, source="ccxt", closed_only=True)
         frame = build_feature_frame(candles)
         if len(frame) < 100:
+            return None, None
+        frame = await load_market_features(db, symbol, frame)
+        if any(not frame[name + "_available"].iloc[-1] for name in MICRO_FEATURES):
             return None, None
         decisions: dict[str, AgentDecision] = {}
         for record in records:
@@ -447,7 +498,9 @@ class RlTrainingService:
 
     def _passes_promotion(self, metrics: dict) -> bool:
         return (
-            float(metrics["return_percent"]) >= self.settings.rl_min_validation_return_percent
+            metrics.get("validation_method") == "PURGED_WALK_FORWARD"
+            and len(metrics.get("walk_forward_folds", [])) >= 2
+            and float(metrics["return_percent"]) >= self.settings.rl_min_validation_return_percent
             and float(metrics.get("excess_return_percent", 0.0)) >= self.settings.rl_min_excess_return_percent
             and float(metrics.get("profitable_seed_ratio", 0.0)) >= self.settings.rl_min_profitable_seed_ratio
             and float(metrics["profit_factor"]) >= self.settings.rl_min_validation_profit_factor
@@ -501,6 +554,7 @@ class RlTrainingService:
             ),
             context={
                 "model_id": record.id,
+                "feature_schema_version": 3,
                 "algorithm": record.algorithm,
                 "timeframe": record.timeframe,
                 "market_data_source": "ccxt",

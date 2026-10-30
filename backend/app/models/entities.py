@@ -183,6 +183,7 @@ class AgentPerformance(Base):
     total_reward: Mapped[float] = mapped_column(Float, default=0.0)
     ema_reward: Mapped[float] = mapped_column(Float, default=0.0)
     rating: Mapped[float] = mapped_column(Float, default=0.5)
+    trust_history: Mapped[list] = mapped_column(JSON, default=list)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -287,6 +288,14 @@ class LearningRule(Base):
     last_reason: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MarketFeatureSnapshot(Base):
+    __tablename__ = "market_feature_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    values: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class DailyRiskState(Base):

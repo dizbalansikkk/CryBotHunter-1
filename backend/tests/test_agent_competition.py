@@ -12,6 +12,7 @@ def performance(name: str, role: str, status: str, rating: float, observations: 
         status=status,
         rating=rating,
         observations=observations,
+        trust_history=[{}] * observations,
         promoted_at=None,
     )
 
@@ -25,10 +26,10 @@ def test_reward_checks_prediction_against_real_trade_outcome():
     assert success is True
     assert reward > 0
     assert wrong is False
-    assert wrong_reward < 0
+    assert wrong_reward == 0  # An unexecuted alternative has no realized PnL.
 
 
-def test_reward_calibrates_conviction_against_outcome():
+def test_reward_cannot_be_increased_by_self_reported_confidence():
     service = AgentCompetitionService()
 
     confident_win, _ = service._reward(
@@ -41,8 +42,8 @@ def test_reward_calibrates_conviction_against_outcome():
         action="BUY", position_side="LONG", pnl=-25, result_r=-1, confidence=0.95
     )
 
-    assert confident_win > uncertain_win > 0
-    assert confident_loss < -uncertain_win
+    assert confident_win == uncertain_win == 1
+    assert confident_loss == -1
 
 
 @pytest.mark.asyncio

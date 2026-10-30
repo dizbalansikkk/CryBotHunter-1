@@ -7,6 +7,7 @@ import gymnasium as gym
 import numpy as np
 import pandas as pd
 from gymnasium import spaces
+from app.services.market_features import MICRO_FEATURES, join_market_features
 
 
 FEATURE_NAMES = [
@@ -17,6 +18,7 @@ FEATURE_NAMES = [
     "atr_percent",
     "volume_zscore",
 ]
+FEATURE_NAMES += MICRO_FEATURES + [name + "_available" for name in MICRO_FEATURES]
 
 
 def build_feature_frame(candles: Sequence[Any]) -> pd.DataFrame:
@@ -58,7 +60,8 @@ def build_feature_frame(candles: Sequence[Any]) -> pd.DataFrame:
     frame["rsi"] = ((rsi.fillna(50) - 50) / 25).clip(-2, 2)
     frame["atr_percent"] = ((atr / close) * 20).clip(0, 2)
     frame["volume_zscore"] = ((frame["volume"] - volume_mean) / volume_std).clip(-3, 3)
-    return frame.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+    return join_market_features(frame, [])
 
 
 class CryptoTradingEnv(gym.Env):
@@ -94,11 +97,14 @@ class CryptoTradingEnv(gym.Env):
         self.peak_equity = 1.0
         self.max_drawdown = 0.0
         self.trades = 0
+        self.closed_trades = 0
         self.positive_returns = 0.0
         self.negative_returns = 0.0
         self.position_return = 0.0
         self.peak_position_return = 0.0
         self.adverse_steps = 0
+        self.trade_max_drawdown = 0.0
+        self.losing_hours = 0.0
         self.behavior_penalties_total = 0.0
         self.strategy_bonuses_total = 0.0
         self.turnover_total = 0.0
@@ -112,11 +118,14 @@ class CryptoTradingEnv(gym.Env):
         self.peak_equity = 1.0
         self.max_drawdown = 0.0
         self.trades = 0
+        self.closed_trades = 0
         self.positive_returns = 0.0
         self.negative_returns = 0.0
         self.position_return = 0.0
         self.peak_position_return = 0.0
         self.adverse_steps = 0
+        self.trade_max_drawdown = 0.0
+        self.losing_hours = 0.0
         self.behavior_penalties_total = 0.0
         self.strategy_bonuses_total = 0.0
         self.turnover_total = 0.0
@@ -125,67 +134,65 @@ class CryptoTradingEnv(gym.Env):
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict]:
         target_position = (0.0, 1.0, -1.0)[int(action)]
-        turnover = abs(target_position - self.position)
-        if turnover > 0:
-            self.trades += 1
         row = self.frame.iloc[self.index]
+        next_row = self.frame.iloc[self.index + 1]
+        hours = max((pd.Timestamp(next_row["timestamp"]) - pd.Timestamp(row["timestamp"])).total_seconds() / 3600, 0)
         latency_risk = abs(float(row["return_1"])) * min(self.latency_ms / 60_000, 1.0) / 10
-        liquidity_risk = max(-float(row["volume_zscore"]), 0.0) * self.market_impact_rate * 0.25
-        dynamic_slippage = self.slippage_rate + self.market_impact_rate + latency_risk + liquidity_risk
-        cost = turnover * (self.fee_rate + dynamic_slippage)
-        replay_weight = max(min(float(row.get("replay_weight", 1.0)), 5.0), 1.0)
-        current_close = max(float(self.frame.iloc[self.index]["close"]), 1e-12)
-        next_close = max(float(self.frame.iloc[self.index + 1]["close"]), 1e-12)
-        market_return = float(np.log(next_close / current_close))
-        net_return = target_position * market_return - cost
-        previous_position = self.position
-        previous_position_return = self.position_return
-        previous_peak_return = self.peak_position_return
-        previous_adverse_steps = self.adverse_steps
-        if turnover > 0:
-            self.position_return = 0.0
+        liquidity_risk = max(-float(row["volume_zscore"]), 0.0) * self.market_impact_rate * .25
+        unit_cost = self.fee_rate + self.slippage_rate + self.market_impact_rate + latency_risk + liquidity_risk
+        turnover = abs(target_position - self.position)
+        cost = turnover * unit_cost
+        reward = 0.0
+        if turnover:
+            self.trades += 1
+            if self.position:
+                self.position_return -= unit_cost
+                reward += self._settle_trade()
+            self.position_return = -unit_cost if target_position else 0.0
             self.peak_position_return = 0.0
-            self.adverse_steps = 0
-        else:
+            self.trade_max_drawdown = 0.0
+            self.losing_hours = 0.0
+        market_return = float(np.log(max(float(next_row["close"]), 1e-12) / max(float(row["close"]), 1e-12)))
+        net_return = target_position * market_return - cost
+        if target_position:
             self.position_return += target_position * market_return
             self.peak_position_return = max(self.peak_position_return, self.position_return)
-            self.adverse_steps = self.adverse_steps + 1 if target_position * market_return < 0 else 0
-        previous_drawdown = max(1 - self.equity / self.peak_equity, 0.0)
-        self.equity *= float(np.exp(net_return))
-        self.peak_equity = max(self.peak_equity, self.equity)
-        drawdown = max(1 - self.equity / self.peak_equity, 0.0)
-        self.max_drawdown = max(self.max_drawdown, drawdown)
-        self.positive_returns += max(net_return, 0.0)
-        self.negative_returns += abs(min(net_return, 0.0))
-        self.turnover_total += turnover
-        self.execution_cost_total += cost
+            self.trade_max_drawdown = max(self.trade_max_drawdown,
+                float(np.exp(self.peak_position_return) - np.exp(self.position_return)))
+            if self.position_return < 0:
+                before = max(self.losing_hours - 24, 0)
+                self.losing_hours += hours
+                penalty = .001 * (max(self.losing_hours - 24, 0) - before)
+                reward -= penalty
+                self.behavior_penalties_total -= penalty
         self.position = target_position
         self.index += 1
         terminated = self.index >= len(self.frame) - 1
-        financial_reward = net_return * 100
-        if financial_reward < 0:
-            financial_reward *= replay_weight
-        behavior_reward = 0.0
-        # Penalize giving back a meaningful unrealized gain and exiting only
-        # after noise, rather than treating every losing close equally.
-        if previous_position and target_position == 0 and previous_peak_return >= 0.005 and previous_position_return < previous_peak_return * 0.4:
-            behavior_reward -= self.behavior_penalty * replay_weight
-        trend_against_position = previous_position * float(row["return_5"]) < -0.05
-        if previous_position and target_position == previous_position and previous_adverse_steps >= 3 and trend_against_position:
-            behavior_reward -= self.behavior_penalty * 0.5 * replay_weight
-        if previous_position and target_position == 0 and previous_adverse_steps >= 3 and trend_against_position:
-            behavior_reward += self.strategy_adherence_bonus
-        aligned = target_position != 0 and target_position * float(row["ema_gap"]) > 0
-        strategy_reward = self.strategy_adherence_bonus if aligned else 0.0
-        self.behavior_penalties_total += min(behavior_reward, 0.0)
-        self.strategy_bonuses_total += max(behavior_reward, 0.0) + strategy_reward
-        reward = (
-            financial_reward
-            - max(drawdown - previous_drawdown, 0.0) * self.drawdown_penalty * 100 * replay_weight
-            + behavior_reward
-            + strategy_reward
-        )
+        if terminated and self.position:
+            # Liquidate the remaining position: no free exit at fold boundary.
+            self.position_return -= unit_cost
+            cost += unit_cost
+            net_return -= unit_cost
+            turnover += abs(self.position)
+            reward += self._settle_trade()
+            self.position = 0.0
+        self.equity *= float(np.exp(net_return))
+        self.peak_equity = max(self.peak_equity, self.equity)
+        self.max_drawdown = max(self.max_drawdown, 1 - self.equity / self.peak_equity)
+        self.turnover_total += turnover
+        self.execution_cost_total += cost
         return self._observation(), float(reward), terminated, False, self.metrics()
+
+    def _settle_trade(self):
+        self.closed_trades += 1
+        net_pnl = float(np.expm1(self.position_return))
+        drawdown = max(self.trade_max_drawdown,
+            float(np.exp(self.peak_position_return) - np.exp(self.position_return)))
+        # Return units share a unit starting notional; costs are already in net_pnl.
+        denominator = max(drawdown, 2 * (self.fee_rate + self.slippage_rate + self.market_impact_rate), .0001)
+        self.positive_returns += max(net_pnl, 0)
+        self.negative_returns += max(-net_pnl, 0)
+        return float(np.clip(net_pnl / denominator, -10, 10))
 
     def metrics(self) -> dict[str, float | int]:
         profit_factor = self.positive_returns / self.negative_returns if self.negative_returns > 0 else (99.0 if self.positive_returns > 0 else 0.0)
@@ -193,7 +200,7 @@ class CryptoTradingEnv(gym.Env):
             "return_percent": round((self.equity - 1) * 100, 4),
             "max_drawdown_percent": round(self.max_drawdown * 100, 4),
             "profit_factor": round(min(profit_factor, 99.0), 4),
-            "trades": self.trades,
+            "trades": self.closed_trades,
             "turnover": round(self.turnover_total, 4),
             "execution_cost_percent": round(self.execution_cost_total * 100, 4),
             "behavior_penalty": round(self.behavior_penalties_total, 4),
