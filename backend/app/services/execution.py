@@ -9,6 +9,8 @@ from app.core.config import get_settings
 from app.models.entities import Order, OrderStatus, Position
 from app.services.exchange import ExchangeClient, PreparedOrder, OrderMinimumError
 from app.services import exit_experiment as experiment
+from app.services.risk_manager import RiskManager
+from app.services.daily_risk import DailyRiskService
 
 
 class ExitSizeAssessment:
@@ -54,12 +56,14 @@ class ExecutionService:
         paper_learning: bool = False,
         min_notional: float = 0.0,
         experiment_plan: dict | None = None,
+        risk_plan: dict | None = None,
     ) -> Order:
+        is_entry = not (reason.startswith("EXIT") or reason.startswith("PARTIAL_TAKE_PROFIT"))
         guarded = select(Position.id).where(
             Position.status == "OPEN",
             Position.entry_context["exit_failure"]["review_required"].as_boolean().is_(True),
         )
-        if reason != "ENTRY":
+        if not is_entry:
             guarded = guarded.where(Position.symbol == symbol)
         unresolved = (await db.execute(guarded.limit(1))).scalar_one_or_none()
         if unresolved is not None:
@@ -83,7 +87,14 @@ class ExecutionService:
         db.add(order)
         await db.flush()
         try:
-            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False):
+            strict_entry = is_entry and getattr(self.settings, "atr_risk_policy_enabled", False)
+            if strict_entry:
+                if not risk_plan:
+                    raise ValueError("RiskManager veto: missing ATR risk plan")
+                day = await DailyRiskService(self.settings, self.exchange).check(db)
+                if not day.allowed:
+                    raise ValueError("RiskManager veto: daily kill switch")
+            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False) and not strict_entry:
                 if not self.settings.paper_trading or not experiment_plan:
                     raise ValueError("Experiment entry requires approved paper SL/TP plan; live protection unavailable")
                 existing = (await db.execute(select(Position.id).where(
@@ -151,7 +162,31 @@ class ExecutionService:
             if prepared_order.amount * fill_price_floor + 1e-10 < min_notional:
                 raise OrderMinimumError("Normalized entry notional is below configured minimum")
             order.requested_amount = prepared_order.amount
-            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False):
+            if strict_entry:
+                day = await DailyRiskService(self.settings, self.exchange).check(db)
+                if not day.allowed:
+                    raise ValueError("RiskManager veto: daily kill switch after order preparation")
+                direction = 1 if side.lower() == "buy" else -1
+                expected_entry = reference_price * (1 + direction * self.settings.paper_slippage_bps / 10000)
+                plan = RiskManager().strict_atr_plan(expected_entry, risk_plan["atr"], "LONG" if direction == 1 else "SHORT")
+                if abs(plan.stop_loss - risk_plan["stop"]) > 1e-7 or abs(plan.take_profit - risk_plan["take"]) > 1e-7:
+                    raise ValueError("RiskManager veto: SL/TP differs from 2 ATR / 5 ATR")
+                friction = max(float(risk_plan["slippage_bps"]), self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps)
+                check = experiment.projection("LONG" if direction == 1 else "SHORT", expected_entry,
+                    prepared_order.amount, plan.stop_loss, plan.take_profit,
+                    max(prepared_order.fee_rate, self.settings.paper_fee_rate), friction)
+                leverage = min(float(venue_setup.get("leverage", 1)), self.settings.futures_leverage,
+                    self.settings.futures_max_leverage) if is_derivatives else 1
+                exposure = day.gross_exposure
+                if not math.isfinite(leverage) or leverage < 1 or not math.isfinite(exposure):
+                    raise ValueError("RiskManager veto: invalid leverage or exposure")
+                if (check["loss"] > day.balance * .01 + 1e-8 or check["profit"] <= 0
+                    or prepared_order.amount * expected_entry + exposure > day.balance * leverage):
+                    raise ValueError("RiskManager veto: net risk, net target or leverage limit")
+                order.raw = {**order.raw, "risk_manager_approval": {**check, "balance": day.balance,
+                    "starting_day_balance": day.starting_day_balance, "daily_pnl": day.daily_pnl,
+                    "leverage": leverage, "stop": plan.stop_loss, "take": plan.take_profit}}
+            if reason == "ENTRY" and getattr(self.settings, "experimental_exit_limits_enabled", False) and not strict_entry:
                 direction = 1 if side.lower() == "buy" else -1
                 expected_entry = reference_price * (1 + direction * self.settings.paper_slippage_bps / 10000)
                 check = experiment.projection("LONG" if direction == 1 else "SHORT", expected_entry,

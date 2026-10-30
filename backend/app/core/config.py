@@ -55,7 +55,9 @@ class Settings(BaseSettings):
     futures_require_native_stop: bool = True
     spot_secondary_enabled: bool = False
     paper_trading: bool = True
-    experimental_exit_limits_enabled: bool = True
+    experimental_exit_limits_enabled: bool = False
+    atr_risk_policy_enabled: bool = True
+    trading_day_timezone: str = "Europe/Kiev"
     # Virtual starting capital used only while execution is in paper mode.
     # It is independent from exchange credentials and gives the dashboard a
     # stable baseline for showing the paper account's equity and PnL.

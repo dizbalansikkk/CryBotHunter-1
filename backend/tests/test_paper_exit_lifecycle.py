@@ -25,6 +25,9 @@ class Ledger:
     def add(self, obj):
         self.session.add(obj)
 
+    def get_bind(self):
+        return self.session.get_bind()
+
     async def execute(self, query):
         return self.session.execute(query)
 

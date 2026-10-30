@@ -22,6 +22,7 @@ from app.services.derivatives_context import DerivativesContextService
 from app.services.exchange import ExchangeClient
 from app.services.execution import ExecutionService
 from app.services import exit_experiment as experiment
+from app.services.daily_risk import DailyRiskService
 from app.services.learning import LearningService
 from app.services.market_quality import MarketQualityGate
 from app.services.market_scanner import MarketScanner
@@ -140,6 +141,13 @@ class TradingEngine:
                 await db.commit()
                 return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
         balance = (await self.exchange.get_balance()).get("USDT", settings.balance)
+        if getattr(self.settings, "atr_risk_policy_enabled", False):
+            day = await DailyRiskService(self.settings, self.exchange).check(db)
+            if not day.allowed:
+                return TradingRunOut(scanned=0, opened=0, skipped=0, decisions=[])
+            balance = day.balance
+            settings = replace(settings, risk_percent=1, atr_stop_multiplier=2,
+                risk_reward_ratio=2.5, daily_risk_percent=2.5)
         settings = self._settings_with_balance(settings, balance)
         drawdown = await self._enforce_drawdown_limit(db, settings.balance)
         if drawdown.emergency:
@@ -622,6 +630,8 @@ class TradingEngine:
             fallback=float(self.settings.paper_starting_balance),
         )
         if not positions:
+            if getattr(self.settings, "atr_risk_policy_enabled", False) and self.settings.paper_trading:
+                await DailyRiskService(self.settings, self.exchange).check(db)
             drawdown = await self._enforce_drawdown_limit(db, balance)
             # Persist periodic equity even while entries are paused and there
             # are no positions; otherwise closing the worker session loses it.
@@ -694,6 +704,13 @@ class TradingEngine:
             record_excursion(position, position.pnl)
             await self._capture_position_microstructure(position)
 
+        if getattr(self.settings, "atr_risk_policy_enabled", False) and self.settings.paper_trading:
+            try:
+                await DailyRiskService(self.settings, self.exchange).check(db,
+                    quotes={symbol: {"last": price} for symbol, price in prices.items()})
+            except ValueError as exc:
+                self._log_trading_event(db, "WARNING", "DAILY_RISK_DATA_UNAVAILABLE", str(exc))
+                # Exit management must continue even when entry risk data fails.
         drawdown = await self._enforce_drawdown_limit(db, balance, force_snapshot=True)
         emergency_close = drawdown.emergency
         pending_order_symbols = await self._pending_order_symbols(db)
@@ -869,7 +886,7 @@ class TradingEngine:
             return {"available": False, "note": "Нет направленного сигнала"}
         try:
             stop, take, _ = self._exit_plan(coin.price, coin.atr, "LONG" if signal == "BUY" else "SHORT", settings)
-            volume = self.risk.calculate_position_size(balance, settings.risk_percent, coin.price, stop,
+            volume = self._calculate_position_size(balance, settings.risk_percent, coin.price, stop,
                 max_position_percent=settings.max_position_size_percent,
                 min_notional=self._minimum_entry_notional(), max_risk_percent=settings.max_risk_percent_per_trade,
                 cost_per_unit=self._entry_cost_per_unit(coin, stop))
@@ -888,6 +905,16 @@ class TradingEngine:
                 "note": "Расчёт до исполнения; не подтверждение допуска или заявки"}
         except (ValueError, TypeError, ArithmeticError):
             return {"available": False, "note": "Некорректные данные для расчёта"}
+
+    def _calculate_position_size(self, balance, risk_percent, entry_price, stop_price, **kwargs):
+        if not getattr(self.settings, "atr_risk_policy_enabled", False):
+            return self.risk.calculate_position_size(balance, risk_percent, entry_price, stop_price, **kwargs)
+        leverage = min(self.settings.futures_leverage, self.settings.futures_max_leverage) if self.exchange.is_derivatives_market() else 1
+        volume = self.risk.strict_position_size(balance, entry_price, stop_price, leverage,
+            kwargs.get("cost_per_unit", 0))
+        if volume * entry_price < kwargs.get("min_notional", 0):
+            return 0.0
+        return volume
 
     def _entry_cost_per_unit(self, coin, stop) -> float:
         from app.services.trade_costs import estimate_costs
@@ -1126,8 +1153,23 @@ class TradingEngine:
         committee: AgentAnalysisOut | None = None,
         microstructure: dict | None = None,
     ) -> Position | None:
+        strict = getattr(self.settings, "atr_risk_policy_enabled", False)
+        if strict:
+            if not self.settings.uses_live_market_data:
+                self._log_trading_event(db, "INFO", "RISK_VETO", "ATR policy requires observed market candles", symbol=coin.symbol)
+                return None
+            day = await DailyRiskService(self.settings, self.exchange).check(db)
+            if not day.allowed:
+                return None
+            balance = day.balance
+            settings = replace(settings, balance=balance, risk_percent=1,
+                atr_stop_multiplier=2, risk_reward_ratio=2.5, daily_risk_percent=2.5)
         side = "LONG" if signal == "BUY" else "SHORT"
-        stop, take, initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
+        try:
+            stop, take, initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
+        except ValueError as exc:
+            self._log_trading_event(db, "INFO", "RISK_VETO", str(exc), symbol=coin.symbol)
+            return None
         if self.exchange.is_derivatives_market():
             buffer_ok, _buffer_reason = self.risk.liquidation_buffer_safe(
                 entry_price=coin.price,
@@ -1137,7 +1179,7 @@ class TradingEngine:
             )
             if not buffer_ok:
                 return None
-        volume = self.risk.calculate_position_size(
+        volume = self._calculate_position_size(
             balance,
             settings.risk_percent,
             coin.price,
@@ -1150,7 +1192,7 @@ class TradingEngine:
         if volume <= 0:
             return None
         experiment_plan = None
-        if getattr(self.settings, "experimental_exit_limits_enabled", False):
+        if getattr(self.settings, "experimental_exit_limits_enabled", False) and not strict:
             # Live entry remains forbidden until BOTH native SL and TP can be
             # reconciled. Paper local protection is never called exchange ACK.
             if not self.settings.paper_trading:
@@ -1173,6 +1215,20 @@ class TradingEngine:
             experiment_plan = {"stop": planned_stop, "take": planned_take, "slippage_bps": friction,
                 "max_loss": experiment.MAX_LOSS, "target_profit": experiment.TARGET_PROFIT, **assessment}
         pre_entry_sizing = self._entry_sizing(coin, signal, balance, settings)
+        risk_plan = None
+        if strict:
+            direction = 1 if side == "LONG" else -1
+            forecast = coin.price * (1 + direction * self.settings.paper_slippage_bps / 10000)
+            stop_check, take_check, _ = self._exit_plan(forecast, coin.atr, side, settings)
+            friction = max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps) + max(float(coin.spread_bps or 0), 0) / 2
+            unit = experiment.projection(side, forecast, 1, stop_check, take_check,
+                self.settings.paper_fee_rate, friction)
+            volume = math.floor(min(volume, balance * .01 / unit["loss"]) * 1e8) / 1e8
+            if volume <= 0 or unit["profit"] <= 0 or volume * forecast < self.settings.min_entry_notional_usdt:
+                self._log_trading_event(db, "INFO", "RISK_VETO", "Nonpositive net target or size below minimum", symbol=coin.symbol)
+                return None
+            risk_plan = {"atr": coin.atr, "stop": stop_check, "take": take_check,
+                "slippage_bps": friction, "balance": balance, "risk_percent": 1.0}
         preflight_plan = await self._assess_scale_out_plan(
             coin.symbol, self._initial_scale_out_plan(
                 side=side, entry_price=coin.price, strategy_take=take,
@@ -1191,6 +1247,7 @@ class TradingEngine:
             paper_learning=paper_exploration,
             min_notional=self.settings.min_entry_notional_usdt,
             experiment_plan=experiment_plan,
+            risk_plan=risk_plan,
         )
         if entry_order.status not in {OrderStatus.FILLED.value, OrderStatus.PARTIAL.value} or not entry_order.average_price:
             return None
@@ -1204,6 +1261,8 @@ class TradingEngine:
         entry_context["exit_fill_ledger_version"] = 1
         entry_context["exit_fills"] = []
         entry_context["execution_mode"] = "PAPER" if self.settings.paper_trading else "LIVE"
+        if risk_plan:
+            entry_context["atr_risk_policy"] = risk_plan
         if experiment_plan:
             entry_context["exit_experiment"] = {**experiment_plan, "protection_mode": "PAPER_LOCAL_SL_TP",
                 "exchange_acknowledged": False}
@@ -1297,9 +1356,9 @@ class TradingEngine:
                               max(self.settings.paper_slippage_bps, self.settings.execution_market_impact_bps)
                               + max(float(coin.spread_bps or 0), 0) / 2) / 10_000)
         entry_context["configured_price_reward_risk"] = settings.risk_reward_ratio
-        if experiment_plan:
+        if experiment_plan or risk_plan:
             actual_projection = experiment.projection(side, entry_price, volume, stop, take,
-                exit_fee_rate, experiment_plan["slippage_bps"], entry_fee=entry_order.fee)
+                exit_fee_rate, (experiment_plan or risk_plan)["slippage_bps"], entry_fee=entry_order.fee)
             planned_risk, planned_reward = actual_projection["loss"], actual_projection["profit"]
         entry_context["gross_target_reward"] = gross_reward
         entry_context["reward_assumption"] = "full_exit_at_final_target_after_estimated_costs; scale_outs_and_trailing_change_outcome"
@@ -1356,6 +1415,12 @@ class TradingEngine:
         db.add(position)
         await db.flush()
         db.add(Trade(position_id=position.id, symbol=coin.symbol, side=side, entry_price=entry_price, exit_price=None, profit=-entry_order.fee))
+        if risk_plan:
+            verified = experiment.projection(side, entry_price, volume, stop, take, exit_fee_rate,
+                risk_plan["slippage_bps"], entry_fee=entry_order.fee)
+            if verified["loss"] > balance * .01 + 1e-8 or verified["profit"] <= 0:
+                await self._close_position(db, position, entry_price, "RISK_PROTECTION_FAILED")
+                return None
         if experiment_plan:
             verified = experiment.projection(side, entry_price, volume, stop, take, exit_fee_rate,
                 experiment_plan["slippage_bps"], entry_fee=entry_order.fee)
@@ -1487,6 +1552,9 @@ class TradingEngine:
         return configured
 
     def _exit_plan(self, entry_price: float, atr: float, side: str, settings: RiskSettings) -> tuple[float, float, float]:
+        if getattr(self.settings, "atr_risk_policy_enabled", False):
+            plan = self.risk.strict_atr_plan(entry_price, atr, side)
+            return plan.stop_loss, plan.take_profit, plan.risk_per_unit
         plan = self.risk.calculate_dynamic_exits(
             entry_price=entry_price,
             atr=atr,
@@ -1520,7 +1588,7 @@ class TradingEngine:
             stop, _take, _initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
         except ValueError as exc:
             return False, f"invalid dynamic risk inputs: {exc}", 0.0
-        volume = self.risk.calculate_position_size(
+        volume = self._calculate_position_size(
             balance,
             settings.risk_percent,
             coin.price,
@@ -1557,7 +1625,7 @@ class TradingEngine:
             stop, _take, _initial_risk = self._exit_plan(coin.price, coin.atr, side, settings)
         except ValueError as exc:
             return False, f"invalid dynamic risk inputs: {exc}", 0.0
-        volume = self.risk.calculate_position_size(
+        volume = self._calculate_position_size(
             balance,
             settings.risk_percent,
             coin.price,

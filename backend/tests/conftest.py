@@ -10,3 +10,4 @@ from app.core.config import get_settings
 @pytest.fixture(autouse=True)
 def historical_policy_baseline(monkeypatch):
     monkeypatch.setattr(get_settings(), "experimental_exit_limits_enabled", False)
+    monkeypatch.setattr(get_settings(), "atr_risk_policy_enabled", False)

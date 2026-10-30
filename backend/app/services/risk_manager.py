@@ -44,6 +44,25 @@ class DrawdownAssessment:
 
 
 class RiskManager:
+    def strict_atr_plan(self, entry_price: float, atr: float, side: str) -> DynamicExitPlan:
+        if not self._is_positive_finite(atr):
+            raise ValueError("ATR must be finite and positive; static fallback forbidden")
+        plan = self.calculate_dynamic_exits(entry_price, atr, side, atr_multiplier=2, risk_reward_ratio=2.5)
+        if plan.risk_per_unit <= 0 or plan.stop_loss == entry_price or plan.take_profit == entry_price:
+            raise ValueError("ATR distance rounds to zero")
+        return plan
+
+    def strict_position_size(self, balance, entry, stop, leverage=1, cost_per_unit=0):
+        if not all(self._is_positive_finite(v) for v in (balance, entry, stop, leverage)):
+            return 0.0
+        distance = abs(entry - stop)
+        if distance <= 0 or not self._is_finite(cost_per_unit) or cost_per_unit < 0:
+            return 0.0
+        # Basic formula is balance*1%/distance. Reserve costs inside the same
+        # budget rather than allowing fees to push loss above one percent.
+        return math.floor(min(balance * .01 / (distance + cost_per_unit),
+                              balance * leverage / entry) * 1e8) / 1e8
+
     def can_open(
         self,
         signal: StrategySignal,

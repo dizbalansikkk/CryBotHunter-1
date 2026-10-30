@@ -289,6 +289,16 @@ class LearningRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class DailyRiskState(Base):
+    __tablename__ = "daily_risk_states"
+    scope: Mapped[str] = mapped_column(String(80), primary_key=True)
+    trading_day: Mapped[date] = mapped_column(Date, primary_key=True)
+    starting_day_balance: Mapped[float] = mapped_column(Float)
+    daily_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    tripped: Mapped[bool] = mapped_column(Boolean, default=False)
+    baseline_source: Mapped[str] = mapped_column(String(80))
+
+
 class EquitySnapshot(Base):
     __tablename__ = "equity_snapshots"
 
