@@ -40,6 +40,7 @@ async def main() -> None:
         return
 
     settings = get_settings()
+    cycle_seconds = settings.scalping_loop_seconds if settings.scalping_enabled else settings.trader_loop_seconds
     locks = RedisLockManager()
     control = TradingControlService()
     notifier = TelegramNotifier()
@@ -47,7 +48,7 @@ async def main() -> None:
     last_cycle_report_at: datetime | None = None
     incidents = IncidentTracker()
     last_summary_at: datetime | None = None
-    logger.info("Trader-worker запущен: интервал торгового цикла=%s сек.", settings.trader_loop_seconds)
+    logger.info("Trader-worker запущен: интервал торгового цикла=%s сек.", cycle_seconds)
     await heartbeat.start()
     schema_ready = await wait_for_required_tables(
         database_engine,
@@ -82,8 +83,8 @@ async def main() -> None:
         await notifier.broadcast(
             format_worker_started(
                 paper_trading=settings.paper_trading,
-                loop_seconds=settings.trader_loop_seconds,
-                exploration_enabled=settings.paper_exploration_enabled,
+                loop_seconds=cycle_seconds,
+                exploration_enabled=settings.paper_exploration_enabled and not settings.scalping_enabled,
                 exploration_max_positions=settings.paper_exploration_max_positions,
                 exploration_risk_percent=settings.paper_exploration_risk_percent,
                 report_interval_minutes=settings.telegram_cycle_report_interval_minutes,
@@ -92,7 +93,7 @@ async def main() -> None:
     while not shutdown.requested:
         current_exchange = settings.default_exchange
         exchange: ExchangeClient | None = None
-        delay = settings.trader_loop_seconds
+        delay = max(1, settings.scalping_loop_seconds) if settings.scalping_enabled else settings.trader_loop_seconds
         try:
             async with AsyncSessionLocal() as db:
                 async with locks.lock(
@@ -114,7 +115,9 @@ async def main() -> None:
                             tick = await trading_engine.manage_open_positions(db)
                             paused, reason = await control.is_paused()
                             if paused:
-                                logger.warning("Сканирование новых входов приостановлено: %s", reason)
+                                if _report_due(last_summary_at, 30):
+                                    logger.warning("Сканирование новых входов приостановлено: %s", reason)
+                                    last_summary_at = datetime.now(timezone.utc)
                                 await heartbeat.set_status("PAUSED", {"reason": reason or "unknown"})
                             elif not shutdown.requested:
                                 risk_settings = RiskSettings(

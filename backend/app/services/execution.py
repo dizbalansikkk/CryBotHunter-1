@@ -59,6 +59,8 @@ class ExecutionService:
         risk_plan: dict | None = None,
     ) -> Order:
         is_entry = not (reason.startswith("EXIT") or reason.startswith("PARTIAL_TAKE_PROFIT"))
+        if is_entry and self.settings.scalping_enabled:
+            raise ValueError("Scalping entry requires the validated paper maker queue")
         guarded = select(Position.id).where(
             Position.status == "OPEN",
             Position.entry_context["exit_failure"]["review_required"].as_boolean().is_(True),

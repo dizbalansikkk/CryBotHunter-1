@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +65,11 @@ async def deep_health() -> dict[str, object]:
     try:
         await redis.ping()
         checks["redis"] = "ok"
+        if settings.scalping_enabled:
+            from app.services.market_stream import PREFIX
+            stamps = await redis.mget([PREFIX + 'health:book', PREFIX + 'health:tape'])
+            checks["scalping_streams"] = {kind + "_age_seconds": round(time.time()-float(stamp), 2) if stamp else None
+                for kind, stamp in zip(("book", "tape"), stamps)}
     except Exception as exc:
         checks["status"] = "degraded"
         checks["redis"] = f"error: {exc.__class__.__name__}"
@@ -80,13 +86,20 @@ async def deep_health() -> dict[str, object]:
     checks["live_trading_enabled"] = settings.live_trading_enabled
     checks["exchange_sandbox_enabled"] = settings.exchange_sandbox_enabled
     checks["allow_live_trading_without_sandbox"] = settings.allow_live_trading_without_sandbox
-    checks["atr_risk_policy_enabled"] = settings.atr_risk_policy_enabled
-    checks["experimental_exit_limits_enabled"] = settings.experimental_exit_limits_enabled and not settings.atr_risk_policy_enabled
-    if settings.atr_risk_policy_enabled:
+    checks["scalping_enabled"] = settings.scalping_enabled
+    checks["atr_risk_policy_enabled"] = settings.atr_risk_policy_enabled and not settings.scalping_enabled
+    checks["experimental_exit_limits_enabled"] = settings.experimental_exit_limits_enabled and not settings.atr_risk_policy_enabled and not settings.scalping_enabled
+    if settings.scalping_enabled:
+        checks["risk_policy"] = {"mode": "PAPER_ORDER_BOOK_TAPE", "risk_percent": settings.scalping_risk_percent,
+            "stop_bps": settings.scalping_stop_bps, "daily_loss_percent": 2.5,
+            "loop_seconds": settings.scalping_loop_seconds, "timeout_seconds": settings.scalping_timeout_seconds,
+            "max_hold_seconds": settings.scalping_max_hold_seconds, "live_entries_allowed": False,
+            "entry": "SIMULATED_POST_ONLY_QUEUE", "hourly_rl_votes": False}
+    elif settings.atr_risk_policy_enabled:
         checks["risk_policy"] = {"risk_percent": 1, "atr_stop_multiplier": 2,
             "atr_take_multiplier": 5, "daily_loss_percent": 2.5,
             "day_timezone": settings.trading_day_timezone, "live_entries_allowed": False}
-    if settings.experimental_exit_limits_enabled and not settings.atr_risk_policy_enabled:
+    if settings.experimental_exit_limits_enabled and not settings.atr_risk_policy_enabled and not settings.scalping_enabled:
         from app.services.exit_experiment import MAX_LOSS, TARGET_PROFIT
         checks["exit_experiment"] = {"max_loss_usdt": MAX_LOSS, "target_profit_usdt": TARGET_PROFIT,
             "live_entries_allowed": False, "protection": "PAPER_LOCAL_SL_TP" if settings.paper_trading else "LIVE_BLOCKED"}
@@ -96,6 +109,11 @@ async def deep_health() -> dict[str, object]:
         "feature_schema_version": 3, "validation": "PURGED_WALK_FORWARD_90D_30D",
         "liquidation_zone_provider_configured": False,
         "new_rl_training": "BLOCKED_UNTIL_POINT_IN_TIME_FEATURE_COVERAGE"}
+    if settings.scalping_enabled:
+        checks["scalping_learning_policy"] = {"reward_version": 2, "offline_only": True,
+            "requires_complete_queue_tape_replay": True, "phase_1_min_sharpe": settings.scalp_training_min_sharpe,
+            "out_of_sample_net_expectancy_required": True, "walk_forward_folds": 2,
+            "cash_reward": "TOXIC_FLAT_ONLY", "automatic_execution_authority": False}
     return checks
 
 

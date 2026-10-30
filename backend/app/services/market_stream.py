@@ -42,6 +42,13 @@ def normalize_event(data, now_ms):
         if payload['bids'][0][0] >= payload['asks'][0][0]:
             return None
         kind = 'book'
+    elif event == 'aggTrade':
+        price, amount = float(data['p']), float(data['q'])
+        trade_time = int(data.get('T', timestamp))
+        if not all(math.isfinite(v) and v > 0 for v in (price, amount)) or not 0 <= now_ms-trade_time <= 5000:
+            return None
+        return 'trade', symbol, {'timestamp': trade_time, 'id': int(data['a']),
+            'price': price, 'amount': amount, 'side': 'sell' if data['m'] else 'buy'}
     else:
         return None
     numbers = ([payload['last'], payload['high'], payload['low'], payload['baseVolume'], payload['quoteVolume']]
@@ -73,6 +80,7 @@ def read_snapshots(kind, symbols):
 
 async def _listen(redis, route, streams):
     delay = 5
+    tapes, saved = {}, {}
     while True:
         try:
             connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
@@ -89,8 +97,22 @@ async def _listen(redis, route, streams):
                                 normalized = None
                             if normalized:
                                 kind, symbol, payload = normalized
+                                if kind == 'trade':
+                                    tape = tapes.setdefault(symbol, [])
+                                    if tape and payload['id'] <= tape[-1]['id']:
+                                        continue
+                                    tape.append(payload)
+                                    cutoff = payload['timestamp'] - 60000
+                                    tapes[symbol] = tape = [t for t in tape[-5000:] if t['timestamp'] >= cutoff]
+                                    if time.monotonic() - saved.get(symbol, 0) < .2:
+                                        continue
+                                    saved[symbol] = time.monotonic()
+                                    payload = {'symbol': symbol, 'timestamp': payload['timestamp'], 'trades': tape}
+                                    kind = 'tape'
                                 await redis.set(PREFIX + kind + ':' + symbol, json.dumps(payload), ex=5)
                                 await redis.set(PREFIX + 'health:' + route, str(time.time()), ex=60)
+                                if kind in {'book', 'tape'}:
+                                    await redis.set(PREFIX + 'health:' + kind, str(time.time()), ex=60)
                             if time.monotonic() - connected > 60:
                                 delay = 5
                         elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
@@ -121,7 +143,8 @@ async def run_market_collector():
             async with locks.lock('binance-market-collector', ttl_seconds=60) as acquired:
                 if acquired:
                     tasks = [asyncio.create_task(_listen(redis, 'market', [s + '@ticker' for s in ids])),
-                             asyncio.create_task(_listen(redis, 'public', [s + '@depth20@500ms' for s in ids]))]
+                             asyncio.create_task(_listen(redis, 'public', [s + '@depth20@500ms' for s in ids])),
+                             asyncio.create_task(_listen(redis, 'market', [s + '@aggTrade' for s in ids]))]
                     try:
                         await asyncio.gather(*tasks)
                     finally:

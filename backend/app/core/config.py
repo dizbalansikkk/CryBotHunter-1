@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     paper_trading: bool = True
     experimental_exit_limits_enabled: bool = False
     atr_risk_policy_enabled: bool = True
+    scalping_enabled: bool = True
+    scalping_loop_seconds: int = Field(default=2, ge=1, le=5)
+    scalping_timeout_seconds: int = Field(default=75, ge=10, le=90)
+    scalping_max_hold_seconds: int = Field(default=180, ge=90, le=300)
+    scalping_maker_wait_seconds: int = Field(default=10, ge=1, le=20)
+    scalping_risk_percent: float = Field(default=0.25, gt=0, le=1)
+    scalping_stop_bps: float = Field(default=20.0, ge=15, le=30)
+    scalping_min_depth_usdt: float = Field(default=10000.0, gt=0)
+    scalping_min_tape_usdt: float = Field(default=5000.0, gt=0)
+    scalping_maker_fee_rate: float = Field(default=0.0002, ge=0, lt=0.01)
+    scalp_training_enabled: bool = True
+    scalp_training_min_trades: int = Field(default=60, ge=30, le=10_000)
+    scalp_training_min_oos_trades: int = Field(default=20, ge=10, le=10_000)
+    scalp_training_min_sharpe: float = Field(default=1.5, ge=0.1, le=10)
+    scalp_training_min_net_expectancy: float = Field(default=0.0, ge=0)
+    scalp_reward_holding_penalty_per_second: float = Field(default=0.001, ge=0, le=1)
+    scalp_reward_loss_beta: float = Field(default=1.0, gt=0, le=10)
+    scalp_reward_timeout_gamma: float = Field(default=0.5, ge=0, le=10)
     trading_day_timezone: str = "Europe/Kiev"
     # Virtual starting capital used only while execution is in paper mode.
     # It is independent from exchange credentials and gives the dashboard a

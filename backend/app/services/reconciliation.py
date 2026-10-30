@@ -27,6 +27,8 @@ class OrderReconciliationService:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
 
         for order in orders:
+            if (order.raw or {}).get("scalp_pending") and (order.raw or {}).get("paper"):
+                continue  # Owned by the persistent paper tape-fill simulator.
             checked += 1
             # Terminal partials already carry their complete venue snapshot.
             snapshot = (order.raw or {}).get("exchange_response") or {}

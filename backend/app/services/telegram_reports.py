@@ -11,6 +11,8 @@ from app.services.telegram_daily import DailyReportSnapshot
 
 
 EXIT_REASON_LABELS = {
+    "SCALP_TIME_STOP": "истёк лимит времени скальперской позиции",
+    "SCALP_TAPE_REVERSAL": "разворот агрессивного потока сделок",
     "EXPERIMENT_LOSS_LIMIT": "достигнут лимит убытка эксперимента",
     "EXPERIMENT_PROTECTION_FAILED": "риск после входа не соответствует эксперименту",
     "TRAILING_STOP": "сработал трейлинг-стоп",

@@ -2387,6 +2387,8 @@ function translateStatus(value: string) {
     EXPERIMENT_LOSS_LIMIT: "Лимит убытка эксперимента",
     EXPERIMENT_PROTECTION_FAILED: "Нарушение защиты эксперимента",
     TRAILING_STOP: "Трейлинг-стоп",
+    SCALP_TIME_STOP: "Лимит времени скальпинга",
+    SCALP_TAPE_REVERSAL: "Разворот ленты сделок",
     BREAKEVEN_STOP: "Стоп безубытка",
     PROFIT_PROTECTION_STOP: "Стоп защиты прибыли",
     DYNAMIC_TAKE_PROFIT_STOP: "Стоп после продления тейка",

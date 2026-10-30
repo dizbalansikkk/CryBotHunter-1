@@ -22,55 +22,58 @@ async def main() -> None:
     if shutdown.requested:
         return
 
-    # Keep PyTorch and Stable Baselines3 out of memory until pre-flight passes.
-    try:
-        from app.services.rl_training import RlTrainingInterrupted, RlTrainingService
-    except ModuleNotFoundError as exc:
-        if exc.name == "stable_baselines3":
-            logger.critical(
-                "RL-worker не запущен: в образе нет stable-baselines3. "
-                "Проверьте, что Railway собрал текущую ветку main и завершил установку зависимостей."
-            )
-        raise
-
     settings = get_settings()
-    trainer = RlTrainingService(stop_requested=lambda: shutdown.requested)
+    # The candle PPO worker has no authority in order-book scalping mode.  Do
+    # not even load its artifact/model code: it could otherwise publish a
+    # stale hourly decision into a microstructure strategy.
+    scalp_learning = None
+    if settings.scalping_enabled:
+        from app.services.scalping_learning import ScalpingLearningService
+        scalp_learning = ScalpingLearningService()
+    else:
+        # Keep PyTorch and Stable Baselines3 out of memory until pre-flight passes.
+        try:
+            from app.services.rl_training import RlTrainingInterrupted, RlTrainingService
+        except ModuleNotFoundError as exc:
+            if exc.name == "stable_baselines3":
+                logger.critical(
+                    "RL-worker не запущен: в образе нет stable_baselines3. "
+                    "Проверьте, что Railway собрал текущую ветку main и завершил установку зависимостей."
+                )
+            raise
+        trainer = RlTrainingService(stop_requested=lambda: shutdown.requested)
     locks = RedisLockManager()
     heartbeat = HeartbeatReporter("rl-worker")
     logger.info(
         "RL-worker запущен: пары=%s таймфреймы=%s цикл=%s сек. максимум обучений за цикл=%s",
-        settings.rl_symbols,
-        settings.candle_ingest_timeframes,
+        ["SCALP/BASKET"] if settings.scalping_enabled else settings.rl_symbols,
+        ["stream"] if settings.scalping_enabled else settings.candle_ingest_timeframes,
         settings.rl_prediction_loop_seconds,
         settings.rl_training_max_per_cycle,
     )
     await heartbeat.start()
     schema_ready = await wait_for_required_tables(
         database_engine,
-        ("trade_post_mortems", "shadow_trades"),
+        ("trade_post_mortems", "shadow_trades", "rl_models"),
         heartbeat=heartbeat,
         shutdown=shutdown,
     )
     if not schema_ready:
         await heartbeat.stop()
         await locks.close()
+        if not settings.scalping_enabled:
+            await trainer.close()
         logger.info("RL-worker остановлен во время ожидания миграции базы данных")
         return
-    async with AsyncSessionLocal() as db:
-        retired = await trainer.retire_excluded_symbols(db, settings.trading_excluded_symbols)
-        if retired["models_retired"] or retired["shadow_trades_closed"]:
-            db.add(
-                LogEntry(
-                    level="INFO",
-                    message=(
-                        f"Исключённые RL-пары очищены: моделей выведено={retired['models_retired']}; "
-                        f"теневых сделок закрыто={retired['shadow_trades_closed']}; "
-                        f"пары={settings.trading_excluded_symbols}"
-                    ),
-                )
-            )
-            logger.info("Очищено RL-состояние исключённых пар: %s", retired)
-        await db.commit()
+    if not settings.scalping_enabled:
+        async with AsyncSessionLocal() as db:
+            retired = await trainer.retire_excluded_symbols(db, settings.trading_excluded_symbols)
+            if retired["models_retired"] or retired["shadow_trades_closed"]:
+                db.add(LogEntry(level="INFO", message=(
+                    f"Исключённые RL-пары очищены: моделей выведено={retired['models_retired']}; "
+                    f"теневых сделок закрыто={retired['shadow_trades_closed']}; пары={settings.trading_excluded_symbols}")))
+                logger.info("Очищено RL-состояние исключённых пар: %s", retired)
+            await db.commit()
     while not shutdown.requested:
         cycle_started = perf_counter()
         processed = 0
@@ -84,13 +87,27 @@ async def main() -> None:
         training_deferred = 0
         waiting = 0
         errors = 0
-        total_pairs = len(settings.rl_symbols) * len(settings.candle_ingest_timeframes)
+        total_pairs = 1 if settings.scalping_enabled else len(settings.rl_symbols) * len(settings.candle_ingest_timeframes)
         training_budget = max(int(settings.rl_training_max_per_cycle), 0)
         try:
             if not settings.rl_trainer_enabled:
                 logger.warning("RL-worker отключён: RL_TRAINER_ENABLED=false")
                 await heartbeat.set_status("DISABLED", {"enabled": False})
             else:
+                if settings.scalping_enabled:
+                    async with AsyncSessionLocal() as db:
+                        async with locks.lock("scalp-learning-worker", ttl_seconds=max(settings.rl_prediction_loop_seconds, 60)) as acquired:
+                            if acquired:
+                                candidates = await scalp_learning.train_candidates(db)
+                                trained = len(candidates)
+                                shadowed = sum(1 for item in candidates if item.status == "SHADOW")
+                                rejected = sum(1 for item in candidates if item.status == "REJECTED")
+                                await db.commit()
+                    await heartbeat.set_status("IDLE", {"stage": "scalp_oos_validation", "trained": trained,
+                        "shadowed": shadowed, "rejected": rejected, "authority": "NONE_PAPER_ONLY"})
+                    if await shutdown.wait(max(settings.rl_prediction_loop_seconds, 60)):
+                        break
+                    continue
                 await heartbeat.set_status(
                     "RUNNING",
                     {
@@ -249,12 +266,12 @@ async def main() -> None:
                     "total_pairs": total_pairs,
                 },
             )
-        finally:
-            await trainer.close()
         if await shutdown.wait(max(settings.rl_prediction_loop_seconds, 60)):
             break
     await heartbeat.stop()
     await locks.close()
+    if not settings.scalping_enabled:
+        await trainer.close()
     logger.info("RL-воркер корректно завершил работу")
 
 

@@ -121,6 +121,9 @@ class TradingEngine:
         )
 
     async def run_once(self, db: AsyncSession, settings: RiskSettings, timeframe: str = "1h") -> TradingRunOut:
+        if self.settings.scalping_enabled:
+            from app.services.scalping import ScalpingEngine
+            return await ScalpingEngine(self).enter(db, max_positions=settings.max_positions)
         cycle_id = uuid4().hex[:10]
         unresolved_exit = (await db.execute(select(Position.id).where(
             Position.status == "OPEN",
@@ -627,6 +630,13 @@ class TradingEngine:
                 await db.execute(select(Position).where(Position.status == "OPEN").order_by(Position.entered_at.asc()))
             ).scalars().all()
         )
+        scalp_tick = TradingTickOut(checked=0, closed=0, updated=[])
+        if getattr(self.settings, "scalping_enabled", False) or any((p.entry_context or {}).get("scalping") for p in positions):
+            from app.services.scalping import ScalpingEngine
+            scalp_tick = await ScalpingEngine(self).manage(db)
+        positions = [p for p in positions if not (p.entry_context or {}).get("scalping")]
+        if getattr(self.settings, "scalping_enabled", False) and not positions:
+            return scalp_tick
         balance = self._safe_balance(
             (await self.exchange.get_balance()).get("USDT"),
             fallback=float(self.settings.paper_starting_balance),
@@ -875,7 +885,7 @@ class TradingEngine:
 
         await db.commit()
         closed = sum(1 for item in updates if item.status == "CLOSED")
-        return TradingTickOut(checked=len(positions), closed=closed, updated=updates)
+        return TradingTickOut(checked=len(positions) + scalp_tick.checked, closed=closed + scalp_tick.closed, updated=updates)
 
     def _paper_exploration_signal(self, coin: MarketCoin, signal: StrategySignal) -> tuple[StrategySignal, bool]:
         return paper_exploration_signal(self.settings, coin, signal)
@@ -1155,6 +1165,8 @@ class TradingEngine:
         committee: AgentAnalysisOut | None = None,
         microstructure: dict | None = None,
     ) -> Position | None:
+        if self.settings.scalping_enabled:
+            return None  # Entries must pass the stream/maker risk path.
         strict = getattr(self.settings, "atr_risk_policy_enabled", False)
         if strict:
             if not self.settings.uses_live_market_data:
@@ -2221,12 +2233,12 @@ class TradingEngine:
                 side=position.side,
                 entry_price=position.entry_price,
                 exit_price=exit_price,
-                profit=round(partial_profit, 4),
+                profit=round(partial_profit, 8 if (position.entry_context or {}).get("scalping") else 4),
             )
         )
         position.pnl = await self._position_total_pnl(db, position, mark_price)
         record_excursion(position, position.pnl)
-        return closed_volume, round(partial_profit, 4)
+        return closed_volume, round(partial_profit, 8 if (position.entry_context or {}).get("scalping") else 4)
 
     async def _experiment_liquidation_pnl(self, db, position, price):
         state = (position.entry_context or {}).get("exit_experiment", {})
@@ -2358,7 +2370,8 @@ class TradingEngine:
                     profit=final_trade_profit,
                 )
             )
-        position.pnl = self._total_closed_profit(previous_realized, final_trade_profit)
+        position.pnl = (round(previous_realized + final_trade_profit, 8) if (position.entry_context or {}).get("scalping")
+            else self._total_closed_profit(previous_realized, final_trade_profit))
         record_excursion(position, position.pnl, at=position.closed_at, final=True)
         if reason in {"STOP_LOSS", "BREAKEVEN_STOP", "TRAILING_STOP", "PROFIT_PROTECTION_STOP",
                       "DYNAMIC_TAKE_PROFIT_STOP", "EMERGENCY_DRAWDOWN", "EXPERIMENT_LOSS_LIMIT"}:
@@ -2398,7 +2411,8 @@ class TradingEngine:
             if loss_breach or (below_target and not audit["protective_exception"]):
                 await self.control.panic(f"experiment_deviation:{position.id}:{reason}:{position.pnl}")
         try:
-            post_mortem = await self.post_mortem.analyze_trade(db, position, exit_order, reason)
+            post_mortem = (None if (position.entry_context or {}).get("scalping") else
+                await self.post_mortem.analyze_trade(db, position, exit_order, reason))
             if post_mortem:
                 self._log_trading_event(
                     db,
@@ -3131,15 +3145,18 @@ class TradingEngine:
 
     def _pnl(self, position: Position, price: float) -> float:
         multiplier = 1 if position.side == "LONG" else -1
-        return round((price - position.entry_price) * position.volume * multiplier, 4)
+        return round((price - position.entry_price) * position.volume * multiplier,
+            8 if (getattr(position, "entry_context", None) or {}).get("scalping") else 4)
 
     def _profit_for_volume(self, position: Position, price: float, volume: float) -> float:
         multiplier = 1 if position.side == "LONG" else -1
-        return round((price - position.entry_price) * volume * multiplier, 4)
+        return round((price - position.entry_price) * volume * multiplier,
+            8 if (getattr(position, "entry_context", None) or {}).get("scalping") else 4)
 
     def _final_trade_profit(self, existing_trade_profit: float, position: Position, exit_price: float, exit_fee: float) -> float:
         remaining_profit = self._profit_for_volume(position, exit_price, position.volume)
-        return round(existing_trade_profit + remaining_profit - exit_fee, 4)
+        return round(existing_trade_profit + remaining_profit - exit_fee,
+            8 if (getattr(position, "entry_context", None) or {}).get("scalping") else 4)
 
     def _total_closed_profit(self, previous_realized: float, final_trade_profit: float) -> float:
         return round(previous_realized + final_trade_profit, 4)
@@ -3211,7 +3228,8 @@ class TradingEngine:
     async def _position_total_pnl(self, db: AsyncSession, position: Position, price: float) -> float:
         realized_profit = await self._position_profit_sum(db, position.id)
         unrealized_profit = self._pnl(position, price)
-        return round(realized_profit + unrealized_profit, 4)
+        return round(realized_profit + unrealized_profit,
+            8 if (getattr(position, "entry_context", None) or {}).get("scalping") else 4)
 
     async def _open_positions_count(self, db: AsyncSession) -> int:
         result = await db.execute(select(func.count()).select_from(Position).where(Position.status == "OPEN"))
